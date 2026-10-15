@@ -139,7 +139,7 @@ const PEER_DIMS = [
 // 학번 20262300nn = 이름(가나다) 순번
 const SEED_STUDENTS = [
   { sid: "2026230001", name: "김종민" },
-  { sid: "2026230002", name: "김종선" },
+  { sid: "2026230002", name: "김종성" },
   { sid: "2026230003", name: "나다움" },
   { sid: "2026230004", name: "도광현" },
   { sid: "2026230005", name: "박인희" },
@@ -165,7 +165,7 @@ const seedProjects = [
   {
     id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: fromNow(5, 23, 59), assignmentTitle: "마케팅 관리 과제", ended: false, sample: true,
     members: [
-      { id: "m1", name: "김종선", role: "자료조사", leader: false, color: AVATARS[0] },
+      { id: "m1", name: "김종성", role: "자료조사", leader: false, color: AVATARS[0] },
       { id: "m2", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
       { id: "m3", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
     ],
@@ -207,6 +207,7 @@ export default function App() {
     const on = s.roster.some((r) => r.sid === stu.sid);
     return { ...s, roster: on ? s.roster.filter((r) => r.sid !== stu.sid) : [...s.roster, stu] };
   }));
+  const setRosterAll = (subjectId, on) => setSubjects((x) => x.map((s) => (s.id === subjectId ? { ...s, roster: on ? SEED_STUDENTS.slice() : [] } : s)));
   const addAssignment = (a) => setAssignments((x) => [...x, { ...a, id: "a" + Date.now() }]);
   const addProject = (p) => { const np = { ...p, id: "p" + Date.now(), chat: [], peerEvals: [] }; setProjects((x) => [...x, np]); return np; };
   const patchProject = (id, fn) => setProjects((x) => x.map((p) => (p.id === id ? fn(p) : p)));
@@ -232,7 +233,7 @@ export default function App() {
 
       <div key={`${role}-${role === "prof" ? pScreen : sScreen}`} className="mx-auto px-5 py-6 fw-fade" style={{ maxWidth: 1080 }}>
         {role === "prof" ? (
-          <ProfArea screen={pScreen} setScreen={setPScreen} subjects={subjects} addSubject={addSubject} rmSubject={rmSubject} toggleSubjectRoster={toggleSubjectRoster} assignments={assignments} addAssignment={addAssignment} projects={projects} active={activeAssignment} setActive={setActiveAssignment} />
+          <ProfArea screen={pScreen} setScreen={setPScreen} subjects={subjects} addSubject={addSubject} rmSubject={rmSubject} toggleSubjectRoster={toggleSubjectRoster} setRosterAll={setRosterAll} assignments={assignments} addAssignment={addAssignment} projects={projects} active={activeAssignment} setActive={setActiveAssignment} />
         ) : (
           <StudentArea screen={sScreen} setScreen={setSScreen} subjects={subjects} assignments={assignments} projects={projects} addProject={addProject} patchProject={patchProject} active={activeProject} setActive={setActiveProject} />
         )}
@@ -242,7 +243,7 @@ export default function App() {
 }
 
 /* =================== PROFESSOR =================== */
-function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSubjectRoster, assignments, addAssignment, projects, active, setActive }) {
+function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSubjectRoster, setRosterAll, assignments, addAssignment, projects, active, setActive }) {
   const [rosterOpenFor, setRosterOpenFor] = useState(null);
   const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "과목 미지정";
   if (screen === "subjects") {
@@ -269,6 +270,10 @@ function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSu
                     {openRoster && (
                       <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
                         <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>학교 재학생 명부에서 이 과목 수강생을 체크하세요(직접 입력 없이 클릭으로 등록·해제).</div>
+                        <label className="flex items-center gap-2 rounded-md px-2.5 py-2 mb-2" style={{ fontSize: 13, fontWeight: 700, background: s.roster.length === SEED_STUDENTS.length ? "#EEF1FE" : "#fff", border: `1px solid ${s.roster.length === SEED_STUDENTS.length ? C.primary : C.line}`, cursor: "pointer" }}>
+                          <input type="checkbox" checked={s.roster.length === SEED_STUDENTS.length} onChange={(e) => setRosterAll(s.id, e.target.checked)} style={{ accentColor: C.primary }} />
+                          전체 선택 <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>({s.roster.length}/{SEED_STUDENTS.length}명)</span>
+                        </label>
                         <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))" }}>
                           {SEED_STUDENTS.map((stu) => {
                             const checked = s.roster.some((r) => r.sid === stu.sid);
