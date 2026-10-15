@@ -154,6 +154,8 @@ function fmtLate(ms) {
   if (h > 0) return mm ? `${h}시간 ${mm}분` : `${h}시간`;
   return `${mm}분`;
 }
+// 제출한 과업은 '마감 시각 전까지만' 수정할 수 있습니다(마감이 지나면 잠김).
+const canEditTask = (t) => !!t.submittedAt && (!t.due || Date.now() <= new Date(t.due).getTime());
 const fmtSize = (n) => (n < 1024 ? `${n}B` : n < 1048576 ? `${Math.round(n / 1024)}KB` : `${(n / 1048576).toFixed(1)}MB`);
 
 /* ---------- 정량 자동채점: 근거는 '정시 제출 여부' + 'AI 복붙 여부' 두 가지뿐 (개인별 100점제) ---------- */
@@ -797,7 +799,14 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
   const meId = me?.id;
 
-  const submit = async (tid, text, files) => { const at = nowLocal(); const r = await detectAI(text); patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, submittedAt: at, ai: r.ai, aiSrc: r.source, text: text.trim(), files: files || [] } : t)) })); return { ...r, submittedAt: at }; };
+  const submit = async (tid, text, files) => {
+    const cur = p.tasks.find((x) => x.id === tid); const isEdit = !!cur?.submittedAt;
+    if (isEdit && !canEditTask(cur)) return { locked: true };           // 마감이 지난 제출물은 수정 불가
+    const at = nowLocal(); const r = await detectAI(text);
+    if (isEdit && !canEditTask(cur)) return { locked: true };           // AI 점검 중 마감이 지났어도 수정 불가
+    patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, submittedAt: at, firstSubmittedAt: t.firstSubmittedAt || (isEdit ? t.submittedAt : at), edits: (t.edits || 0) + (isEdit ? 1 : 0), ai: r.ai, aiSrc: r.source, text: text.trim(), files: files || [] } : t)) }));
+    return { ...r, submittedAt: at, edited: isEdit };
+  };
   const addFolder = (name) => patch((pr) => ({ ...pr, folders: [...(pr.folders || []), { id: "f" + Date.now(), name }] }));
   const renameFolder = (id, name) => patch((pr) => ({ ...pr, folders: (pr.folders || []).map((f) => (f.id === id ? { ...f, name } : f)) }));
   const removeFolder = (id) => patch((pr) => ({ ...pr, folders: (pr.folders || []).filter((f) => f.id !== id), tasks: pr.tasks.map((t) => (t.folderId === id ? { ...t, folderId: null } : t)) }));
@@ -839,9 +848,9 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
       <div className="flex gap-1 mt-3 overflow-x-auto rounded-2xl p-1.5" style={{ scrollbarWidth: "none", background: "#fff", border: `1px solid ${C.line}`, boxShadow: SH.card }}>{TABS.map(([k, label, Icon]) => <div key={k} className="flex-shrink-0"><Tab active={tab === k} onClick={() => setTab(k)} icon={<Icon size={16} />}>{label}</Tab></div>)}</div>
       <div className="mt-4">
         {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
-        {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && !t.submittedAt && setSubmitFor(t)} />}
+        {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && (!t.submittedAt || canEditTask(t)) && setSubmitFor(t)} meId={meId} />}
         {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} />}
-        {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
+        {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} meId={meId} onEdit={(t) => setSubmitFor(t)} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
         {tab === "score" && <ScoreTab members={p.members} tasks={p.tasks} meId={meId} />}
         {tab === "peer" && <PeerTab key={meId} members={p.members} peerEvals={p.peerEvals} meId={meId} ended={!!p.ended} isLeader={!!me?.leader} onEnd={endProject} onSubmit={submitPeer} />}
         {tab === "team" && <TeamTab members={p.members} tasks={p.tasks} me={me} setRole={setMemberRole} />}
@@ -929,7 +938,7 @@ function ChatTab({ members, chat, me, finalDue, sendMsg, addTask }) {
 }
 
 /* ---------- CALENDAR ---------- */
-function CalendarTab({ members, tasks, finalDue, addTask, onPick }) {
+function CalendarTab({ members, tasks, finalDue, addTask, onPick, meId }) {
   const [y, setY] = useState(today.getFullYear()); const [m, setM] = useState(today.getMonth());
   const [sel, setSel] = useState(`${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`);
   const [showAdd, setShowAdd] = useState(false);
@@ -1015,7 +1024,8 @@ function CalendarTab({ members, tasks, finalDue, addTask, onPick }) {
               <div className="flex items-center justify-center rounded-lg" style={{ width: 30, height: 30, background: s.soft, flexShrink: 0 }}><s.Icon size={16} color={s.color} /></div>
               <div className="flex-1 min-w-0"><div style={{ fontWeight: 600, fontSize: 14 }} className="truncate">{t.title}</div><div className="inline-flex items-center gap-1" style={{ fontSize: 12, color: C.muted }}><span className="rounded-full" style={{ width: 7, height: 7, background: colorOf(t.owner) }} /> {nameOf(t.owner)} · {fmt(t.due)}</div></div>
               <span className="rounded-full px-2.5 py-1" style={{ fontSize: 12, fontWeight: 600, color: s.color, background: s.soft }}>{s.label}</span>
-              {onPick && ["pending", "missed"].includes(statusOf(t)) && <button onClick={() => onPick(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: C.green }}>제출</button>}
+              {onPick && t.owner === meId && ["pending", "missed"].includes(statusOf(t)) && <button onClick={() => onPick(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: C.green }}>제출</button>}
+              {onPick && t.owner === meId && canEditTask(t) && <button onClick={() => onPick(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 700, color: C.primary, background: "#EEF2FF", border: "1px solid #D9E1FB" }}>수정</button>}
             </div>
           ); })}</div>
         )}
@@ -1026,6 +1036,7 @@ function CalendarTab({ members, tasks, finalDue, addTask, onPick }) {
 
 /* ---------- TIMELINE ---------- */
 function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
+  const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
   const [title, setTitle] = useState(""); const [owner, setOwner] = useState(me?.id); const [due, setDue] = useState(fromNow(7, 23, 59));
   const merged = [...tasks]; if (finalDue) merged.push({ id: "__final", title: "프로젝트 최종 마감", due: finalDue, isFinal: true });
   const sorted = merged.sort((a, b) => (a.due || "").localeCompare(b.due || ""));
@@ -1067,6 +1078,8 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
                   </div>
                   <span className="rounded-full px-2.5 py-1 inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 600, color: s.color, background: s.soft, whiteSpace: "nowrap" }}><s.Icon size={13} /> {s.label}</span>
                   {mineToSubmit && <button onClick={() => onSubmit(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: C.green }}>제출</button>}
+                  {t.owner === me?.id && canEditTask(t) && <button onClick={() => onSubmit(t)} title="마감 시각 전까지 내용을 수정할 수 있어요" className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 700, color: C.primary, background: "#EEF2FE", border: "1px solid #D9E1FB" }}>수정</button>}
+                  {t.owner === me?.id && t.submittedAt && !canEditTask(t) && <span className="inline-flex items-center gap-1" title="마감이 지나 수정할 수 없어요" style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}><Lock size={11} /> 수정 마감</span>}
                 </div>
               </div>
             );
@@ -1078,7 +1091,8 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
 }
 
 /* ---------- 팀 자료실: 팀원이 제출한 글·파일을 한 화면에 모으고, 팀장이 폴더로 정리 ---------- */
-function BoardTab({ members, tasks, folders, isLeader, addFolder, renameFolder, removeFolder, moveTask }) {
+function BoardTab({ members, tasks, folders, isLeader, meId, onEdit, addFolder, renameFolder, removeFolder, moveTask }) {
+  const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
   const [filter, setFilter] = useState("all");
   const [adding, setAdding] = useState(false); const [newName, setNewName] = useState("");
   const [editId, setEditId] = useState(null); const [editName, setEditName] = useState("");
@@ -1102,7 +1116,8 @@ function BoardTab({ members, tasks, folders, isLeader, addFolder, renameFolder, 
           {m && <Avatar m={m} sm />}<span style={{ fontWeight: 700, fontSize: 14 }}>{m?.name}</span>
           <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>· {t.title}</span>
           <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: M.color, background: M.soft }}><M.Icon size={11} /> {M.label}{st === "late" ? ` · ${fmtLate(lateMs(t))} 지각` : ""}</span>
-          <span style={{ fontSize: 12, color: C.muted }}>제출 {fmt(t.submittedAt)}</span>
+          <span style={{ fontSize: 12, color: C.muted }}>제출 {fmt(t.submittedAt)}{t.edits ? ` · 수정 ${t.edits}회` : ""}</span>
+          {t.owner === meId && canEditTask(t) && <button onClick={() => onEdit(t)} className="rounded-md px-2 py-1" style={{ fontSize: 12, fontWeight: 700, color: C.primary, background: "#EEF2FE", border: "1px solid #D9E1FB" }}>수정</button>}
           {isLeader && folders.length > 0 && (
             <label className="ml-auto inline-flex items-center gap-1" style={{ fontSize: 12, color: C.muted }}><Folder size={12} />
               <select value={t.folderId && folders.some((f) => f.id === t.folderId) ? t.folderId : ""} onChange={(e) => moveTask(t.id, e.target.value)} className="rounded-md px-1.5 py-1" style={{ fontSize: 12, fontWeight: 700, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, outline: "none" }}>
@@ -1365,8 +1380,10 @@ function RolePicker({ value, onChange }) {
 
 /* ---------- SUBMIT MODAL ---------- */
 function SubmitModal({ task, onClose, onSubmit }) {
-  const [text, setText] = useState(""); const [result, setResult] = useState(null); const [busy, setBusy] = useState(false);
-  const [files, setFiles] = useState([]); const [fileErr, setFileErr] = useState("");
+  const editing = !!task.submittedAt;                               // 이미 제출한 과업을 마감 전에 수정하는 경우
+  const [text, setText] = useState(task.text || ""); const [result, setResult] = useState(null); const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState(task.files || []); const [fileErr, setFileErr] = useState(""); const [lockMsg, setLockMsg] = useState("");
+  const doneWord = editing ? "수정 완료!" : "제출 완료!";
   const done = result != null; const len = text.trim().length;
   const MAX_FILES = 5, MAX_MB = 10;
   const pickFiles = (e) => {
@@ -1382,17 +1399,18 @@ function SubmitModal({ task, onClose, onSubmit }) {
   const nowDue = task.due ? Date.now() - new Date(task.due).getTime() : 0;
   const nowLate = nowDue > 0;
   const nowTier = nowLate ? LATE_TIERS.slice(1, 5).find((x) => nowDue <= x.max) : null;
-  const go = async () => { if (!text.trim() || busy) return; setBusy(true); const r = await onSubmit(task.id, text, files); const lm = task.due ? new Date(r.submittedAt).getTime() - new Date(task.due).getTime() : 0; setResult({ ...r, late: lm > 0 ? lm : 0, tier: lm > 0 ? LATE_TIERS.slice(1, 5).find((x) => lm <= x.max) : null }); setBusy(false); };
+  const go = async () => { if (!text.trim() || busy) return; setBusy(true); const r = await onSubmit(task.id, text, files); if (r.locked) { setLockMsg("마감 시각이 지나 수정할 수 없어요. 제출한 내용은 그대로 유지됩니다."); setBusy(false); return; } const lm = task.due ? new Date(r.submittedAt).getTime() - new Date(task.due).getTime() : 0; setResult({ ...r, late: lm > 0 ? lm : 0, tier: lm > 0 ? LATE_TIERS.slice(1, 5).find((x) => lm <= x.max) : null }); setBusy(false); };
   const flagged = done && isFlagged(result.ai);
   const mid = done && !flagged && result.ai >= AI_LOW;
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4" style={{ background: "rgba(20,22,43,0.5)", backdropFilter: "blur(3px)", zIndex: 50 }} onClick={onClose}>
       <div className="fw-fade rounded-2xl w-full" style={{ maxWidth: 520, background: "#fff", boxShadow: SH.pop }} onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.line}` }}><div className="flex items-center gap-2"><Search size={16} color={C.primary} /><span style={{ fontWeight: 700 }}>자료 제출 · AI 복붙 점검</span></div><button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button></div>
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.line}` }}><div className="flex items-center gap-2"><Search size={16} color={C.primary} /><span style={{ fontWeight: 700 }}>{editing ? "제출 내용 수정 · AI 복붙 점검" : "자료 제출 · AI 복붙 점검"}</span></div><button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button></div>
         <div className="px-5 py-4">
           <div style={{ fontSize: 13, color: C.muted }}>과업</div><div style={{ fontWeight: 700, marginBottom: 4 }}>{task.title}</div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>마감 {fmt(task.due)}</div>
-          {!done && nowLate && <div className="rounded-lg px-3 py-2 mb-3" style={{ fontSize: 12, background: C.amberSoft, color: "#8A5300" }}><b>마감이 {fmtLate(nowDue)} 지났어요.</b> 지금 제출하면 지연 제출로 기록되고, 정시 제출 점수는 <b>{nowTier.pts}점</b>({nowTier.label})이 반영돼요.</div>}
+          {!done && editing && <div className="rounded-lg px-3 py-2 mb-3" style={{ fontSize: 12, background: "#EEF2FF", color: C.primary }}><b>마감 시각({fmt(task.due)})까지만 수정할 수 있어요.</b> 마감이 지나면 수정할 수 없고, 수정하면 AI 점검을 다시 합니다.</div>}
+          {!done && !editing && nowLate && <div className="rounded-lg px-3 py-2 mb-3" style={{ fontSize: 12, background: C.amberSoft, color: "#8A5300" }}><b>마감이 {fmtLate(nowDue)} 지났어요.</b> 지금 제출하면 지연 제출로 기록되고, 정시 제출 점수는 <b>{nowTier.pts}점</b>({nowTier.label})이 반영돼요.</div>}
           {!done ? (
             <>
               <div style={{ fontSize: 13, color: C.ink, marginBottom: 6 }}>찾은 자료를 <b>본인 언어로 정리</b>해 붙여넣어 주세요. 제출하면 AI 탐지로 복붙 여부를 점검하고, 점검 결과는 기여도 근거로 기록됩니다.</div>
@@ -1407,7 +1425,8 @@ function SubmitModal({ task, onClose, onSubmit }) {
                 {fileErr && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{fileErr}</div>}
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>첨부 파일은 참고 자료로만 저장되고, AI 점검은 위에 작성한 글에만 적용됩니다. 제출한 글과 파일은 팀 자료실에 모입니다.</div>
               </div>
-              <div className="flex gap-2 mt-3"><button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : "제출하고 검사"}</button><button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
+              {lockMsg && <div className="rounded-lg px-3 py-2 mt-3" style={{ fontSize: 12, background: C.redSoft, color: C.red, fontWeight: 600 }}>{lockMsg}</div>}
+              <div className="flex gap-2 mt-3">{!lockMsg && <button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : editing ? "수정 저장하고 다시 검사" : "제출하고 검사"}</button>}<button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
             </>
           ) : (
             <div className="rounded-xl px-4 py-4 text-center" style={{ background: flagged ? C.redSoft : mid ? C.amberSoft : C.greenSoft }}>
@@ -1415,8 +1434,8 @@ function SubmitModal({ task, onClose, onSubmit }) {
               <div style={{ fontSize: 32, fontWeight: 800, color: flagged ? C.red : mid ? C.amber : C.green }}>{result.ai}%</div>
               <div className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 mt-1" style={{ fontSize: 11, fontWeight: 700, background: "#fff", color: result.source === "copyleaks" ? C.primary : C.muted }}>{AI_SRC[result.source]}</div>
               {result.note && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{result.note}</div>}
-              <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>{result.late > 0 ? <>지연 제출 · <b>{fmtLate(result.late)}</b> 지각 → 정시 점수 <b>{result.tier.pts}점</b></> : <>정시 제출 → 정시 점수 <b>100점</b></>}{files.length > 0 && <> · 참고 파일 {files.length}개 첨부</>}</div>
-              <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "사용 의심(70% 이상) → 점수에 크게 반영되고 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : mid ? "일부 사용 가능성(30~69%) → 점수에 소폭만 반영되며 교수님 확인 대상은 아닙니다. 제출 완료!" : "사용하지 않았을 가능성 높음(30% 미만) → 감점 없이 본인 정리로 인정됩니다. 제출 완료!"}</div>
+              <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>{editing && <b>수정 저장 · </b>}{result.late > 0 ? <>지연 제출 · <b>{fmtLate(result.late)}</b> 지각 → 정시 점수 <b>{result.tier.pts}점</b></> : <>정시 제출 → 정시 점수 <b>100점</b></>}{files.length > 0 && <> · 참고 파일 {files.length}개 첨부</>}</div>
+              <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "사용 의심(70% 이상) → 점수에 크게 반영되고 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : mid ? "일부 사용 가능성(30~69%) → 점수에 소폭만 반영되며 교수님 확인 대상은 아닙니다. " + doneWord : "사용하지 않았을 가능성 높음(30% 미만) → 감점 없이 본인 정리로 인정됩니다. " + doneWord}</div>
               <button onClick={onClose} className="rounded-md px-4 py-2 mt-3" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button>
             </div>
           )}
