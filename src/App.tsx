@@ -8,7 +8,7 @@ import {
   Trophy, GraduationCap, User, CalendarDays, ShieldAlert, MessageSquare, Layers,
   ChevronLeft, ChevronRight, Sparkles, Link2, Search, X, ClipboardCheck,
   Star, Lock, EyeOff, FolderPlus, FilePlus2, ArrowLeft, ClipboardList,
-  Scale, Check, Bell, BellRing, BadgeCheck,
+  Scale, Check, Bell, BellRing, BadgeCheck, Paperclip, FileText, Folder, FolderOpen, Pencil, Download,
 } from "lucide-react";
 
 /* ---------- palette ---------- */
@@ -78,45 +78,95 @@ const SM = {
   missed:  { label: "미제출",     color: C.red,   soft: C.redSoft,   Icon: AlertTriangle, w: 0 },
 };
 
-/* ---------- illustrative AI estimator (NOT a real detector) ---------- */
+/* ---------- 시연용 AI 추정 (실제 탐지기 아님 — 시제품 시연용 규칙) ----------
+   • 짧게 직접 쓴 글 → 사람이 쓴 것으로 판단(낮은 %)
+   • 길게 붙여넣은 글 → AI 작성 의심(높은 %), 시연용 PESTEL 분석 문서는 99%
+   실제 AI 탐지 API는 사업화 단계에서 연동합니다. */
+const SAMPLE_MARKERS = ["PESTEL", "AI기본법", "RISE", "대학 AI 활용 윤리 가이드라인", "핵심 시사점"];
 function mockAiScore(text) {
-  const t = (text || "").trim();
+  const t = (text || "").replace(/\s+/g, "");
   if (!t) return 0;
-  let s = 45;
-  const ai = ["따라서", "또한", "뿐만 아니라", "결론적으로", "다양한", "살펴보면", "측면에서", "제공한다", "고려하여", "중요하다"];
-  const human = ["찾아보니", "내 생각", "것 같", "정리하면", "솔직히", "근데", "우리가", "내가", "봤는데", "헷갈", "ㅋ"];
-  ai.forEach((m) => { if (t.includes(m)) s += 8; });
-  human.forEach((m) => { if (t.includes(m)) s -= 9; });
-  if (t.length > 400) s += 10; if (t.length < 120) s -= 8;
-  const sents = t.split(/[.!?。\n]/).filter((x) => x.trim().length > 0);
-  if (sents.length >= 3) {
-    const lens = sents.map((x) => x.trim().length);
-    const avg = lens.reduce((a, b) => a + b, 0) / lens.length;
-    const varc = lens.reduce((a, b) => a + Math.abs(b - avg), 0) / lens.length;
-    if (varc < 10) s += 12;
-  }
-  return Math.max(5, Math.min(95, Math.round(s)));
+  if (SAMPLE_MARKERS.filter((m) => t.includes(m.replace(/\s+/g, ""))).length >= 3) return 99;
+  let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 9973;
+  const n = t.length;
+  if (n < 150) return 5 + (h % 15);                                 // 5~19%
+  if (n < 400) return 25 + Math.round(((n - 150) / 250) * 45);       // 25~70%
+  if (n < 800) return 75 + Math.round(((n - 400) / 400) * 20);       // 75~95%
+  return 96 + (h % 3);                                               // 96~98%
+}
+/* ---------- AI 탐지 호출 ----------
+   REAL_AI_API = false : 시제품 시연용 추정만 사용 (현재)
+   REAL_AI_API = true  : 서버 함수(/api/detect → Copyleaks)를 호출하고, 실패하면 시연용 추정으로 대체 (사업화 단계에서 켬) */
+const REAL_AI_API = false;
+const AI_SRC = { copyleaks: "Copyleaks 실제 탐지", sandbox: "Copyleaks 샌드박스(테스트값)", demo: "시연용 추정" };
+const DEMO_NOTE = "시제품이라 시연용 추정값입니다. 실제 AI 탐지 API는 사업화 단계에서 연동합니다.";
+async function detectAI(text) {
+  const t = (text || "").trim();
+  const demo = (note) => ({ ai: mockAiScore(t), source: "demo", note: note || DEMO_NOTE });
+  if (!REAL_AI_API) { await new Promise((r) => setTimeout(r, 900)); return demo(); } // '검사 중' 연출
+  if (t.length < 255) return demo(`글이 ${t.length}자라서 실제 탐지 최소 기준(255자)에 못 미쳐 시연용 추정으로 계산했어요.`);
+  try {
+    const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 25000);
+    const r = await fetch("/api/detect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: t }), signal: ctl.signal });
+    clearTimeout(timer);
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && typeof j.ai === "number") return { ai: j.ai, source: j.sandbox ? "sandbox" : "copyleaks", note: j.sandbox ? "샌드박스 모드라 실제 탐지가 아닌 테스트 결과입니다." : "" };
+    return demo("AI 탐지 서버에서 결과를 받지 못해 시연용 추정으로 계산했어요.");
+  } catch (e) { return demo("AI 탐지 서버에 연결하지 못해 시연용 추정으로 계산했어요."); }
 }
 const authFactor = (ai) => (ai == null ? 0 : ai < 30 ? 1 : ai <= 60 ? 0.7 : 0.3);
 const isFlagged = (ai) => ai != null && ai > 60;
+
+/* ---------- 정시 제출 점수표 (마감 후 늦은 시간에 따라) ----------
+   정시 100 · 마감 1초 후~3시간 80 · 3시간 초과~24시간 60 · 24시간 초과~3일 미만 40 · 3일 이상 20 · 미제출 0
+   ※ 구간·점수는 시제품 기본값이며, 실제 서비스에서는 교수가 과제별로 조정할 수 있게 합니다. */
+const H = 3600000;
+const LATE_TIERS = [
+  { key: "ontime", pts: 100, label: "정시 제출",           range: "마감 시각 이내" },
+  { key: "l3",     pts: 80,  label: "3시간 이내 지각",      range: "마감 후 1초 ~ 3시간", max: 3 * H },
+  { key: "l24",    pts: 60,  label: "24시간 이내 지각",     range: "3시간 초과 ~ 24시간", max: 24 * H },
+  { key: "l72",    pts: 40,  label: "3일 미만 지각",        range: "24시간 초과 ~ 3일 미만", max: 72 * H - 1 },
+  { key: "l72p",   pts: 20,  label: "3일 이상 지각",        range: "3일 이상", max: Infinity },
+  { key: "missed", pts: 0,   label: "미제출",              range: "제출 없이 마감 경과" },
+];
+const lateMs = (t) => (t.submittedAt && t.due ? new Date(t.submittedAt).getTime() - new Date(t.due).getTime() : 0);
+// 과업 하나의 '정시 제출 점수' (0~100). 아직 진행 중이면 null
+function timePts(t) {
+  const st = statusOf(t);
+  if (st === "pending") return null;
+  if (st === "missed") return 0;
+  const ms = lateMs(t);
+  if (ms <= 0) return 100;
+  return LATE_TIERS.slice(1, 5).find((x) => ms <= x.max).pts;
+}
+function fmtLate(ms) {
+  const m = Math.max(1, Math.round(ms / 60000));
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  if (d > 0) return h ? `${d}일 ${h}시간` : `${d}일`;
+  if (h > 0) return mm ? `${h}시간 ${mm}분` : `${h}시간`;
+  return `${mm}분`;
+}
+const fmtSize = (n) => (n < 1024 ? `${n}B` : n < 1048576 ? `${Math.round(n / 1024)}KB` : `${(n / 1048576).toFixed(1)}MB`);
 
 /* ---------- 정량 자동채점: 근거는 '정시 제출 여부' + 'AI 복붙 여부' 두 가지뿐 (개인별 100점제) ---------- */
 // 마감이 지났거나 제출된 과업만 집계합니다(아직 진행 중인 과업은 점수에 넣지 않음).
 function computeAuto(members, tasks) {
   return members.map((m) => {
     const mine = tasks.filter((t) => t.owner === m.id);
-    let judged = 0, ontime = 0, late = 0, subm = 0, authSum = 0, workPts = 0, flags = 0;
+    let judged = 0, ontime = 0, late = 0, subm = 0, authSum = 0, workPts = 0, timeSum = 0, flags = 0;
     mine.forEach((t) => {
       const st = statusOf(t);
       if (st === "pending") return;
       judged++;
+      const tw = timePts(t) / 100;            // 지각 단계별 정시 점수 (100/80/60/40/20/0)
+      timeSum += tw;
       if (st === "ontime") ontime++; if (st === "late") late++;
-      if (["ontime", "late"].includes(st)) { subm++; authSum += authFactor(t.ai); workPts += SM[st].w * authFactor(t.ai); }
+      if (["ontime", "late"].includes(st)) { subm++; authSum += authFactor(t.ai); workPts += tw * authFactor(t.ai); }
       if (isFlagged(t.ai)) flags++;
     });
     const den = judged || 1;
     const contribution = Math.round((workPts / den) * 100);
-    const timeliness = Math.round(((ontime + 0.6 * late) / den) * 100);
+    const timeliness = Math.round((timeSum / den) * 100);
     const quality = subm ? Math.round((authSum / subm) * 100) : 0;
     const overall = judged ? Math.round((contribution + timeliness + quality) / 3) : 0;
     return { ...m, contribution, timeliness, quality, overall, subm, assigned: judged, total: mine.length, ontime, flags };
@@ -169,16 +219,24 @@ const seedProjects = [
       { id: "m2", sid: "2026230010", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
       { id: "m3", sid: "2026230006", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
     ],
+    folders: [{ id: "f1", name: "시장·경쟁 조사" }, { id: "f2", name: "기획·발표" }],
     tasks: [
-      { id: "t1", title: "주제 선정 & 시장 리서치", owner: "m1", due: fromNow(-8, 18, 0), submittedAt: fromNow(-9, 21, 30), ai: 15 },
-      { id: "t2", title: "경쟁사례 조사 5건", owner: "m1", due: fromNow(-3, 23, 59), submittedAt: fromNow(-4, 20, 10), ai: 42 },
+      { id: "t1", title: "주제 선정 & 시장 리서치", owner: "m1", due: fromNow(-8, 18, 0), submittedAt: fromNow(-9, 21, 30), ai: 15, folderId: "f1",
+        text: "국내 대학 팀프로젝트에서 쓰는 협업 도구를 조사했다. 노션·구글독스는 같이 쓰기는 편하지만 '누가 얼마나 했는지'는 남지 않는다는 점이 가장 큰 빈틈이었다. 이 빈틈을 기여 근거 기록으로 메우는 방향으로 주제를 잡았다.", files: [] },
+      { id: "t2", title: "경쟁사례 조사 5건", owner: "m1", due: fromNow(-3, 23, 59), submittedAt: fromNow(-4, 20, 10), ai: 42, folderId: "f1",
+        text: "CATME, Buddycheck, 노션, 구글독스, 팀즈 5개를 비교했다. 해외 도구는 동료평가 중심이라 평가 시점이 끝난 뒤이고, 국내 도구는 기록 자체가 없다. 제출 시각과 AI 점검을 근거로 남기는 곳은 찾지 못했다.", files: [{ id: "sf1", name: "경쟁사례_비교표.xlsx", size: 18432 }] },
       { id: "t3", title: "자료조사 (환경분석 근거)", owner: "m1", due: fromNow(5, 18, 0), submittedAt: null, ai: null },
-      { id: "t4", title: "발표 슬라이드 초안", owner: "m2", due: fromNow(-6, 12, 0), submittedAt: fromNow(-6, 9, 10), ai: 28 },
-      { id: "t5", title: "설문지 설계", owner: "m2", due: fromNow(-3, 12, 0), submittedAt: fromNow(-2, 1, 40), ai: 68 },
+      { id: "t4", title: "발표 슬라이드 초안", owner: "m2", due: fromNow(-6, 12, 0), submittedAt: fromNow(-6, 9, 10), ai: 28, folderId: "f2",
+        text: "슬라이드는 문제 제기, 제품 소개, 환경 분석, 시연, 결론 순서로 잡았다. 문제 제기는 팀플 경험 때문에 공감하기 쉬운 '무임승차' 사례로 시작한다.", files: [{ id: "sf2", name: "슬라이드_초안.pptx", size: 412000 }] },
+      { id: "t5", title: "설문지 설계", owner: "m2", due: fromNow(-3, 12, 0), submittedAt: fromNow(-2, 1, 40), ai: 68,
+        text: "설문은 팀플 경험 유무, 무임승차 경험, 평가 방식 만족도, 도구 사용 의향 4개 영역으로 나눴다. 문항은 총 12개이고 객관식 10개, 서술형 2개다.", files: [] },
       { id: "t6", title: "슬라이드 작성 (최종)", owner: "m2", due: fromNow(3, 18, 0), submittedAt: null, ai: null },
-      { id: "t7", title: "프로토타입 기획서", owner: "m3", due: fromNow(-7, 18, 0), submittedAt: fromNow(-7, 14, 0), ai: 18 },
-      { id: "t8", title: "시연 시나리오 작성", owner: "m3", due: fromNow(-4, 18, 0), submittedAt: fromNow(-4, 11, 30), ai: 45 },
-      { id: "t9", title: "가격 설정 근거 정리", owner: "m3", due: fromNow(-2, 12, 0), submittedAt: fromNow(-2, 15, 20), ai: 25 },
+      { id: "t7", title: "프로토타입 기획서", owner: "m3", due: fromNow(-7, 18, 0), submittedAt: fromNow(-7, 14, 0), ai: 18, folderId: "f2",
+        text: "프로토타입은 과업 등록, 제출 기록, 기여도 보고서 3단계로 구성한다. 학생은 과업을 제출하면 되고, 교수는 근거 중심으로 팀별 기여를 확인한다.", files: [{ id: "sf3", name: "프로토타입_화면.png", size: 245000 }] },
+      { id: "t8", title: "시연 시나리오 작성", owner: "m3", due: fromNow(-4, 18, 0), submittedAt: fromNow(-4, 11, 30), ai: 45,
+        text: "시연은 팀 만들기, 과업 제출과 AI 점검, 기여도 확인 순서로 진행한다. 짧은 직접 작성 글과 긴 붙여넣기 글의 결과 차이를 보여주는 것이 핵심이다.", files: [] },
+      { id: "t9", title: "가격 설정 근거 정리", owner: "m3", due: fromNow(-2, 12, 0), submittedAt: fromNow(-2, 13, 50), ai: 25,
+        text: "학생은 무료, 교수는 무료 시범 후 학교·학과 단위 구독으로 간다. 대학 재정이 빠듯해 처음부터 유료 도입은 어렵다는 점을 근거로 삼았다.", files: [] },
       { id: "t10", title: "발표 연습", owner: "m3", due: inHours(20), submittedAt: null, ai: null },
     ],
     chat: [
@@ -204,18 +262,25 @@ export default function App() {
   const changeStudent = (sid, stay) => { setStudentSid(sid); if (!stay) { setSScreen("home"); setActiveProject(null); } };
   const [activeAssignment, setActiveAssignment] = useState(null);
 
-  const addSubject = (name) => setSubjects((x) => [...x, { id: "sub" + Date.now(), name, roster: [] }]);
-  const rmSubject = (id) => setSubjects((x) => x.filter((s) => s.id !== id));
-  const toggleSubjectRoster = (subjectId, stu) => setSubjects((x) => x.map((s) => {
-    if (s.id !== subjectId) return s;
-    const on = s.roster.some((r) => r.sid === stu.sid);
-    return { ...s, roster: on ? s.roster.filter((r) => r.sid !== stu.sid) : [...s.roster, stu] };
-  }));
-  const setRosterAll = (subjectId, on) => setSubjects((x) => x.map((s) => (s.id === subjectId ? { ...s, roster: on ? SEED_STUDENTS.slice() : [] } : s)));
+  const [toast, setToast] = useState(null);
+  const notify = (msg) => setToast({ msg, id: Date.now() });
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2400); return () => clearTimeout(t); }, [toast]);
+
+  const addSubject = (name) => { setSubjects((x) => [...x, { id: "sub" + Date.now(), name, roster: [] }]); notify(`과목 '${name}'을 등록했어요`); };
+  const rmSubject = (id) => { setSubjects((x) => x.filter((s) => s.id !== id)); notify("과목을 삭제했어요"); };
+  const renameSubject = (id, name) => { setSubjects((x) => x.map((s) => (s.id === id ? { ...s, name } : s))); notify("과목 이름을 바꿨어요"); };
+  // 수강생 명단은 '완료'를 눌렀을 때만 반영됩니다(체크 중에는 임시 선택).
+  const saveRoster = (subjectId, sids) => { setSubjects((x) => x.map((s) => (s.id === subjectId ? { ...s, roster: SEED_STUDENTS.filter((st) => sids.includes(st.sid)) } : s))); notify(`수강생 ${sids.length}명으로 저장했어요`); };
   const addAssignment = (a) => setAssignments((x) => [...x, { ...a, id: "a" + Date.now() }]);
+  // 과제를 수정하면 이미 만들어진 팀 프로젝트의 과제명·최종 마감도 함께 맞춥니다.
+  const updateAssignment = (id, v) => {
+    setAssignments((x) => x.map((a) => (a.id === id ? { ...a, ...v } : a)));
+    setProjects((x) => x.map((p) => (p.assignmentId === id ? { ...p, assignmentTitle: v.title, finalDue: v.finalDue } : p)));
+  };
+  const deleteAssignment = (id) => { setAssignments((x) => x.filter((a) => a.id !== id)); setProjects((x) => x.filter((p) => p.assignmentId !== id)); };
   const addProject = (p) => {
     const leader = p.members.find((m) => m.leader);
-    const np = { ...p, id: "p" + Date.now(), ended: false, peerEvals: [], chat: [{ id: "c" + Date.now(), sender: "sys", text: `팀장 ${leader?.name}님이 프로젝트를 만들고 팀원 ${p.members.length - 1}명을 추가했어요. 팀원 모두 이 프로젝트에 들어올 수 있습니다.`, ts: Date.now() }] };
+    const np = { ...p, id: "p" + Date.now(), ended: false, peerEvals: [], folders: [], chat: [{ id: "c" + Date.now(), sender: "sys", text: `팀장 ${leader?.name}님이 프로젝트를 만들고 팀원 ${p.members.length - 1}명을 추가했어요. 팀원 모두 이 프로젝트에 들어올 수 있습니다.`, ts: Date.now() }] };
     setProjects((x) => [...x, np]); return np;
   };
   const patchProject = (id, fn) => setProjects((x) => x.map((p) => (p.id === id ? fn(p) : p)));
@@ -249,18 +314,122 @@ export default function App() {
 
       <div key={`${role}-${role === "prof" ? pScreen : sScreen}`} className="mx-auto px-5 py-6 fw-fade" style={{ maxWidth: 1080 }}>
         {role === "prof" ? (
-          <ProfArea screen={pScreen} setScreen={setPScreen} subjects={subjects} addSubject={addSubject} rmSubject={rmSubject} toggleSubjectRoster={toggleSubjectRoster} setRosterAll={setRosterAll} assignments={assignments} addAssignment={addAssignment} projects={projects} active={activeAssignment} setActive={setActiveAssignment} />
+          <ProfArea screen={pScreen} setScreen={setPScreen} subjects={subjects} addSubject={addSubject} rmSubject={rmSubject} renameSubject={renameSubject} saveRoster={saveRoster} assignments={assignments} addAssignment={addAssignment} updateAssignment={updateAssignment} deleteAssignment={deleteAssignment} projects={projects} active={activeAssignment} setActive={setActiveAssignment} notify={notify} />
         ) : (
           <StudentArea me={meStudent} switchStudent={changeStudent} createFor={createFor} setCreateFor={setCreateFor} screen={sScreen} setScreen={setSScreen} subjects={subjects} assignments={assignments} projects={projects} addProject={addProject} patchProject={patchProject} active={activeProject} setActive={setActiveProject} />
         )}
       </div>
+      {toast && <div key={toast.id} className="fw-fade fixed inline-flex items-center gap-2 rounded-xl px-4 py-2.5" style={{ left: "50%", bottom: 28, transform: "translateX(-50%)", zIndex: 60, fontSize: 14, fontWeight: 600, color: "#fff", background: "rgba(20,22,43,.94)", boxShadow: SH.pop }}><CheckCircle2 size={16} color="#8CE0B8" /> {toast.msg}</div>}
     </div>
   );
 }
 
 /* =================== PROFESSOR =================== */
-function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSubjectRoster, setRosterAll, assignments, addAssignment, projects, active, setActive }) {
-  const [rosterOpenFor, setRosterOpenFor] = useState(null);
+const selStyle = { fontSize: 14, border: `1px solid ${C.line}`, outline: "none", background: "#fff" };
+const dangerBtn = { fontSize: 13, fontWeight: 700, color: "#fff", background: C.red };
+
+// 수강생 등록: 체크는 '임시 선택'이고 [완료]를 눌러야 저장됩니다. [취소]하면 모두 버립니다.
+function RosterEditor({ subject, teamSids, onSave, onCancel }) {
+  const orig = subject.roster.map((r) => r.sid);
+  const [draft, setDraft] = useState(orig);
+  const added = draft.filter((x) => !orig.includes(x)), removed = orig.filter((x) => !draft.includes(x));
+  const changed = added.length + removed.length;
+  const all = draft.length === SEED_STUDENTS.length;
+  const toggle = (sid) => setDraft((d) => (d.includes(sid) ? d.filter((x) => x !== sid) : [...d, sid]));
+  const inTeam = removed.filter((sid) => teamSids.has(sid)).map((sid) => SEED_STUDENTS.find((x) => x.sid === sid)?.name);
+  return (
+    <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>학교 재학생 명부에서 이 과목 수강생을 체크하세요. 체크는 임시 선택이며, <b style={{ color: C.ink }}>[완료]를 눌러야 저장</b>됩니다.</div>
+      <label className="flex items-center gap-2 rounded-md px-2.5 py-2 mb-2" style={{ fontSize: 13, fontWeight: 700, background: all ? "#EEF1FE" : "#fff", border: `1px solid ${all ? C.primary : C.line}`, cursor: "pointer" }}>
+        <input type="checkbox" checked={all} onChange={(e) => setDraft(e.target.checked ? SEED_STUDENTS.map((x) => x.sid) : [])} style={{ accentColor: C.primary }} />
+        전체 선택 <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>({draft.length}/{SEED_STUDENTS.length}명)</span>
+      </label>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))" }}>
+        {SEED_STUDENTS.map((stu) => {
+          const checked = draft.includes(stu.sid);
+          return (
+            <label key={stu.sid} className="flex items-center gap-2 rounded-md px-2 py-1.5" style={{ fontSize: 13, background: checked ? "#EEF1FE" : "#fff", border: `1px solid ${checked ? C.primary : C.line}`, cursor: "pointer" }}>
+              <input type="checkbox" checked={checked} onChange={() => toggle(stu.sid)} style={{ accentColor: C.primary }} />
+              {stu.name} <span style={{ color: C.muted, fontSize: 11 }}>{stu.sid}</span>
+            </label>
+          );
+        })}
+      </div>
+      {inTeam.length > 0 && <div className="rounded-md px-3 py-2 mt-2" style={{ fontSize: 12, background: C.amberSoft, color: "#8A5300" }}>{inTeam.join(", ")} 님은 이미 팀 프로젝트에 속해 있어요. 명단에서 해제해도 기존 팀 구성은 그대로 유지됩니다.</div>}
+      <div className="flex items-center gap-2 flex-wrap mt-3">
+        <PrimaryBtn onClick={() => onSave(draft)} disabled={changed === 0}><Check size={15} /> 완료</PrimaryBtn>
+        <GhostBtn onClick={onCancel}>취소</GhostBtn>
+        <span style={{ fontSize: 12, color: changed ? "#8A5300" : C.muted, fontWeight: changed ? 700 : 400 }}>{changed ? `저장 안 된 변경 ${changed}건 (추가 ${added.length} · 해제 ${removed.length})` : "변경 사항 없음"}</span>
+      </div>
+    </div>
+  );
+}
+
+function SubjectRow({ s, assignmentCount, teamSids, onRename, onRemove, onSaveRoster }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false); const [name, setName] = useState(s.name);
+  const [del, setDel] = useState(false);
+  const saveName = () => { const n = name.trim(); if (!n) return; if (n !== s.name) onRename(s.id, n); setEditing(false); };
+  return (
+    <div className="rounded-lg px-3 py-2" style={{ border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <GraduationCap size={15} color={C.muted} />
+        {editing ? (
+          <>
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { setEditing(false); setName(s.name); } }} className="rounded-md px-2 py-1 flex-1" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", minWidth: 140 }} />
+            <button onClick={saveName} disabled={!name.trim()} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: name.trim() ? C.primary : "#B7BFE0" }}>저장</button>
+            <button onClick={() => { setEditing(false); setName(s.name); }} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: C.ink, background: "#fff", border: `1px solid ${C.line}` }}>취소</button>
+          </>
+        ) : (
+          <>
+            <span className="flex-1" style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>수강생 {s.roster.length}명 · 과제 {assignmentCount}개</span>
+            {!open && <button onClick={() => setOpen(true)} className="rounded-md px-2 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}>수강생 등록</button>}
+            <button onClick={() => { setEditing(true); setName(s.name); setDel(false); }} aria-label="과목 이름 바꾸기" className="rounded-md p-1.5" style={{ color: C.muted }}><Pencil size={15} /></button>
+            <button onClick={() => setDel(!del)} aria-label="과목 삭제" className="rounded-md p-1.5" style={{ color: C.muted }}><Trash2 size={15} /></button>
+          </>
+        )}
+      </div>
+      {del && !editing && (
+        assignmentCount > 0
+          ? <div className="rounded-md px-3 py-2 mt-2 flex items-center gap-2 flex-wrap" style={{ fontSize: 12, background: C.amberSoft, color: "#8A5300" }}>이 과목에 개설된 과제가 {assignmentCount}개 있어 삭제할 수 없어요. 과제를 먼저 삭제해 주세요.<button onClick={() => setDel(false)} style={{ marginLeft: "auto", fontWeight: 700 }}>확인</button></div>
+          : <div className="rounded-md px-3 py-2 mt-2 flex items-center gap-2 flex-wrap" style={{ fontSize: 12, background: C.redSoft, color: C.red }}>'{s.name}' 과목과 수강생 명단(수강생 {s.roster.length}명)을 삭제할까요?<span className="ml-auto inline-flex gap-1.5"><button onClick={() => onRemove(s.id)} className="rounded-md px-2.5 py-1" style={dangerBtn}>삭제</button><button onClick={() => setDel(false)} className="rounded-md px-2.5 py-1" style={{ fontSize: 12, fontWeight: 600, color: C.ink, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></span></div>
+      )}
+      {open && !editing && <RosterEditor subject={s} teamSids={teamSids} onSave={(sids) => { onSaveRoster(s.id, sids); setOpen(false); }} onCancel={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+function AssignmentDetail({ a, teams, subjectName, onBack, onEdit, onDelete }) {
+  const [del, setDel] = useState(false);
+  return (
+    <div>
+      <Back onClick={onBack}>과제 목록</Back>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 mb-1" style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}><GraduationCap size={12} /> {subjectName(a.subjectId)}</div>
+          <h2 style={h2}>{a.title}</h2>
+        </div>
+        <div className="flex gap-2"><GhostBtn onClick={onEdit}><Pencil size={14} /> 과제 수정</GhostBtn><GhostBtn onClick={() => setDel(!del)}><Trash2 size={14} /> 삭제</GhostBtn></div>
+      </div>
+      {del && (
+        <div className="rounded-xl px-4 py-3 mt-3 flex items-center gap-3 flex-wrap" style={{ background: C.redSoft, border: `1px solid ${C.red}` }}>
+          <div style={{ fontSize: 13, color: C.red, flex: 1, minWidth: 220 }}><b>'{a.title}' 과제를 삭제할까요?</b>{teams.length > 0 ? ` 이 과제로 만들어진 팀 프로젝트 ${teams.length}팀과 제출 기록도 함께 삭제되며, 되돌릴 수 없어요.` : " 되돌릴 수 없어요."}</div>
+          <button onClick={onDelete} className="rounded-md px-3 py-2" style={dangerBtn}>삭제하기</button>
+          <button onClick={() => setDel(false)} className="rounded-md px-3 py-2" style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: "#fff", border: `1px solid ${C.line}` }}>취소</button>
+        </div>
+      )}
+      <p style={{ color: C.muted, fontSize: 14, marginTop: 8 }}>{a.desc || "설명이 없습니다."}</p>
+      <div className="flex gap-2 mt-3 mb-2">
+        <Meta k="최종 마감" v={fmt(a.finalDue)} /><Meta k="제출 팀" v={`${teams.length}팀`} />
+      </div>
+      {teams.length === 0 ? <Empty title="아직 생성된 팀 프로젝트가 없습니다" sub="학생이 이 과제로 프로젝트를 만들면 팀별 기여도가 여기 표시됩니다." /> :
+        teams.map((p) => <ProfTeamCard key={p.id} p={p} />)}
+    </div>
+  );
+}
+
+function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, renameSubject, saveRoster, assignments, addAssignment, updateAssignment, deleteAssignment, projects, active, setActive, notify }) {
   const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "과목 미지정";
   if (screen === "subjects") {
     return (
@@ -273,38 +442,9 @@ function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSu
           {subjects.length === 0 ? <div style={{ fontSize: 13, color: C.muted, marginTop: 10 }}>등록된 과목이 없습니다.</div> : (
             <div className="mt-3 grid gap-2">
               {subjects.map((s) => {
-                const openRoster = rosterOpenFor === s.id;
-                return (
-                  <div key={s.id} className="rounded-lg px-3 py-2" style={{ border: `1px solid ${C.line}` }}>
-                    <div className="flex items-center gap-2">
-                      <GraduationCap size={15} color={C.muted} />
-                      <span className="flex-1" style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</span>
-                      <span style={{ fontSize: 12, color: C.muted }}>수강생 {s.roster.length}명</span>
-                      <button onClick={() => setRosterOpenFor(openRoster ? null : s.id)} className="rounded-md px-2 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}>{openRoster ? "닫기" : "수강생 등록"}</button>
-                      <button onClick={() => rmSubject(s.id)} className="rounded-md p-1.5" style={{ color: C.muted }}><Trash2 size={15} /></button>
-                    </div>
-                    {openRoster && (
-                      <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
-                        <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>학교 재학생 명부에서 이 과목 수강생을 체크하세요(직접 입력 없이 클릭으로 등록·해제).</div>
-                        <label className="flex items-center gap-2 rounded-md px-2.5 py-2 mb-2" style={{ fontSize: 13, fontWeight: 700, background: s.roster.length === SEED_STUDENTS.length ? "#EEF1FE" : "#fff", border: `1px solid ${s.roster.length === SEED_STUDENTS.length ? C.primary : C.line}`, cursor: "pointer" }}>
-                          <input type="checkbox" checked={s.roster.length === SEED_STUDENTS.length} onChange={(e) => setRosterAll(s.id, e.target.checked)} style={{ accentColor: C.primary }} />
-                          전체 선택 <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>({s.roster.length}/{SEED_STUDENTS.length}명)</span>
-                        </label>
-                        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))" }}>
-                          {SEED_STUDENTS.map((stu) => {
-                            const checked = s.roster.some((r) => r.sid === stu.sid);
-                            return (
-                              <label key={stu.sid} className="flex items-center gap-2 rounded-md px-2 py-1.5" style={{ fontSize: 13, background: checked ? "#EEF1FE" : "#fff", border: `1px solid ${checked ? C.primary : C.line}`, cursor: "pointer" }}>
-                                <input type="checkbox" checked={checked} onChange={() => toggleSubjectRoster(s.id, stu)} style={{ accentColor: C.primary }} />
-                                {stu.name} <span style={{ color: C.muted, fontSize: 11 }}>{stu.sid}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
+                const asg = assignments.filter((a) => a.subjectId === s.id);
+                const teamSids = new Set(projects.filter((p) => asg.some((a) => a.id === p.assignmentId)).flatMap((p) => p.members.map((m) => m.sid)));
+                return <SubjectRow key={s.id} s={s} assignmentCount={asg.length} teamSids={teamSids} onRename={renameSubject} onRemove={rmSubject} onSaveRoster={saveRoster} />;
               })}
             </div>
           )}
@@ -312,24 +452,11 @@ function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSu
       </div>
     );
   }
-  if (screen === "create") return <CreateAssignment subjects={subjects} onManageSubjects={() => setScreen("subjects")} onCancel={() => setScreen("home")} onDone={(a) => { addAssignment(a); setScreen("home"); }} />;
-  if (screen === "assignment" && active) {
-    const a = assignments.find((x) => x.id === active);
-    const teams = projects.filter((p) => p.assignmentId === active);
-    return (
-      <div>
-        <Back onClick={() => setScreen("home")}>과제 목록</Back>
-        <div className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 mb-1" style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}><GraduationCap size={12} /> {subjectName(a.subjectId)}</div>
-        <h2 style={h2}>{a.title}</h2>
-        <p style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>{a.desc}</p>
-        <div className="flex gap-2 mt-3 mb-2">
-          <Meta k="최종 마감" v={fmt(a.finalDue)} /><Meta k="제출 팀" v={`${teams.length}팀`} />
-        </div>
-        {teams.length === 0 ? <Empty title="아직 생성된 팀 프로젝트가 없습니다" sub="학생이 이 과제로 프로젝트를 만들면 팀별 기여도가 여기 표시됩니다." /> :
-          teams.map((p) => <ProfTeamCard key={p.id} p={p} />)}
-      </div>
-    );
-  }
+  if (screen === "create") return <AssignmentForm mode="create" subjects={subjects} onManageSubjects={() => setScreen("subjects")} onCancel={() => setScreen("home")} onDone={(v) => { addAssignment(v); notify("과제를 개설했어요"); setScreen("home"); }} />;
+  const a = active ? assignments.find((x) => x.id === active) : null;
+  const teams = a ? projects.filter((p) => p.assignmentId === a.id) : [];
+  if (screen === "edit" && a) return <AssignmentForm mode="edit" initial={a} teamCount={teams.length} subjects={subjects} onManageSubjects={() => setScreen("subjects")} onCancel={() => setScreen("assignment")} onDone={(v) => { updateAssignment(a.id, v); notify("과제를 수정했어요"); setScreen("assignment"); }} />;
+  if (screen === "assignment" && a) return <AssignmentDetail a={a} teams={teams} subjectName={subjectName} onBack={() => setScreen("home")} onEdit={() => setScreen("edit")} onDelete={() => { deleteAssignment(a.id); setActive(null); notify("과제를 삭제했어요"); setScreen("home"); }} />;
   return (
     <div>
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
@@ -346,14 +473,14 @@ function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, toggleSu
       </div>
       {assignments.length === 0 ? <Empty title="개설한 과제가 없습니다" sub="'과제 개설'로 첫 과제를 만들어 보세요." /> : (
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))" }}>
-          {assignments.map((a) => {
-            const n = projects.filter((p) => p.assignmentId === a.id).length;
+          {assignments.map((x) => {
+            const n = projects.filter((p) => p.assignmentId === x.id).length;
             return (
-              <button key={a.id} onClick={() => { setActive(a.id); setScreen("assignment"); }} className="fw-lift text-left rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.line}`, boxShadow: SH.card }}>
-                <div className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 mb-2" style={{ fontSize: 11, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}><GraduationCap size={11} /> {subjectName(a.subjectId)}</div>
-                <div className="flex items-center gap-2 mb-2"><span className="rounded-md p-1.5" style={{ background: "#EEF1FE" }}><ClipboardList size={16} color={C.primary} /></span><span style={{ fontWeight: 700 }}>{a.title}</span></div>
-                <div style={{ fontSize: 13, color: C.muted, minHeight: 36 }}>{a.desc}</div>
-                <div className="flex items-center justify-between mt-3" style={{ fontSize: 12, color: C.muted }}><span className="inline-flex items-center gap-2"><CalendarDays size={13} /> {fmt(a.finalDue)} <DDayChip due={a.finalDue} /></span><span className="inline-flex items-center gap-1">{n}팀 <ChevronRight size={14} /></span></div>
+              <button key={x.id} onClick={() => { setActive(x.id); setScreen("assignment"); }} className="fw-lift text-left rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.line}`, boxShadow: SH.card }}>
+                <div className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 mb-2" style={{ fontSize: 11, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}><GraduationCap size={11} /> {subjectName(x.subjectId)}</div>
+                <div className="flex items-center gap-2 mb-2"><span className="rounded-md p-1.5" style={{ background: "#EEF1FE" }}><ClipboardList size={16} color={C.primary} /></span><span style={{ fontWeight: 700 }}>{x.title}</span></div>
+                <div style={{ fontSize: 13, color: C.muted, minHeight: 36 }}>{x.desc}</div>
+                <div className="flex items-center justify-between mt-3" style={{ fontSize: 12, color: C.muted }}><span className="inline-flex items-center gap-2"><CalendarDays size={13} /> {fmt(x.finalDue)} <DDayChip due={x.finalDue} /></span><span className="inline-flex items-center gap-1">{n}팀 <ChevronRight size={14} /></span></div>
               </button>
             );
           })}
@@ -453,14 +580,20 @@ function ProfTeamCard({ p }) {
     </Card>
   );
 }
-function CreateAssignment({ subjects, onManageSubjects, onCancel, onDone }) {
-  const [subjectId, setSubjectId] = useState(subjects[0]?.id || "");
-  const [title, setTitle] = useState(""); const [desc, setDesc] = useState(""); const [finalDue, setFinalDue] = useState(fromNow(21, 18, 0));
+// 과제 개설/수정 공용 폼: [개설하기/저장]을 눌러야 반영되고, 취소·뒤로가기는 입력을 버립니다.
+function AssignmentForm({ mode, initial, teamCount = 0, subjects, onManageSubjects, onCancel, onDone }) {
+  const edit = mode === "edit";
+  const [subjectId, setSubjectId] = useState(initial?.subjectId || subjects[0]?.id || "");
+  const [title, setTitle] = useState(initial?.title || ""); const [desc, setDesc] = useState(initial?.desc || ""); const [finalDue, setFinalDue] = useState(initial?.finalDue || fromNow(21, 18, 0));
   const selected = subjects.find((s) => s.id === subjectId);
+  const lockSubject = edit && teamCount > 0;
+  const dirty = edit ? (subjectId !== initial.subjectId || title.trim() !== initial.title || desc.trim() !== (initial.desc || "") || finalDue !== initial.finalDue) : !!(title.trim() || desc.trim());
+  const valid = !!(title.trim() && subjectId && finalDue);
+  const submit = () => { if (valid) onDone({ subjectId, title: title.trim(), desc: desc.trim(), finalDue }); };
   return (
     <div style={{ maxWidth: 620, margin: "0 auto" }}>
-      <Back onClick={onCancel}>과제 목록</Back>
-      <h2 style={h2}>과제 개설</h2>
+      <Back onClick={onCancel}>{edit ? "과제로 돌아가기" : "과제 목록"}</Back>
+      <h2 style={h2}>{edit ? "과제 수정" : "과제 개설"}</h2>
       <Card className="mt-3">
         {subjects.length === 0 ? (
           <div className="rounded-xl px-4 py-4 flex items-center justify-between flex-wrap gap-2" style={{ background: C.amberSoft, border: `1px solid ${C.amber}` }}>
@@ -469,12 +602,19 @@ function CreateAssignment({ subjects, onManageSubjects, onCancel, onDone }) {
           </div>
         ) : (
           <>
-            <Field label="과목"><select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} className="w-full rounded-md px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", background: "#fff" }}>{subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
-            <div className="rounded-lg px-3 py-2 mt-1.5 inline-flex items-center gap-1.5" style={{ fontSize: 12, color: C.muted, background: C.canvas }}><Users size={13} /> 이 과목 수강생 {selected?.roster.length || 0}명이 자동으로 이 과제의 참여 명단이 됩니다. (변경은 '과목 관리'에서)</div>
+            <Field label="과목"><select value={subjectId} disabled={lockSubject} onChange={(e) => setSubjectId(e.target.value)} className="w-full rounded-md px-3 py-2" style={{ ...selStyle, background: lockSubject ? "#F2F4FA" : "#fff" }}>{subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+            {lockSubject
+              ? <div className="rounded-lg px-3 py-2 mt-1.5 inline-flex items-center gap-1.5" style={{ fontSize: 12, color: "#8A5300", background: C.amberSoft }}><Lock size={13} /> 이미 팀 {teamCount}개가 만들어져 있어 과목은 바꿀 수 없어요.</div>
+              : <div className="rounded-lg px-3 py-2 mt-1.5 inline-flex items-center gap-1.5" style={{ fontSize: 12, color: C.muted, background: C.canvas }}><Users size={13} /> 이 과목 수강생 {selected?.roster.length || 0}명이 자동으로 이 과제의 참여 명단이 됩니다. (변경은 '과목 관리'에서)</div>}
             <Field label="과제명" mt><TextInput value={title} onChange={setTitle} placeholder="예) 디지털비즈니스 팀프로젝트" /></Field>
             <Field label="설명 · 제출 요건" mt><textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3} placeholder="무엇을, 어떤 형태로 제출해야 하는지" className="w-full rounded-md px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} /></Field>
             <Field label="최종 마감(날짜·시간)" mt><input type="datetime-local" value={finalDue} onChange={(e) => setFinalDue(e.target.value)} className="rounded-md px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none" }} /></Field>
-            <div className="flex gap-2 mt-4"><PrimaryBtn onClick={() => title.trim() && subjectId && onDone({ subjectId, title: title.trim(), desc: desc.trim(), finalDue })}>개설하기</PrimaryBtn><GhostBtn onClick={onCancel}>취소</GhostBtn></div>
+            {edit && teamCount > 0 && <div className="rounded-lg px-3 py-2 mt-3" style={{ fontSize: 12, color: C.muted, background: C.canvas }}>저장하면 이미 만들어진 팀 {teamCount}개의 <b style={{ color: C.ink }}>과제명과 최종 마감</b>도 함께 바뀌어 학생 화면에 반영됩니다.</div>}
+            <div className="flex items-center gap-2 flex-wrap mt-4">
+              <PrimaryBtn onClick={submit} disabled={!valid || (edit && !dirty)}><Check size={15} /> {edit ? "저장" : "개설하기"}</PrimaryBtn>
+              <GhostBtn onClick={onCancel}>취소</GhostBtn>
+              <span style={{ fontSize: 12, color: !title.trim() ? C.muted : dirty ? "#8A5300" : C.muted, fontWeight: dirty && title.trim() ? 700 : 400 }}>{!title.trim() ? "과제명을 입력해야 저장할 수 있어요" : edit ? (dirty ? "저장 안 된 변경이 있어요. [저장]을 눌러야 반영됩니다" : "변경 사항 없음") : "[개설하기]를 눌러야 과제가 만들어집니다"}</span>
+            </div>
           </>
         )}
       </Card>
@@ -632,14 +772,18 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
   const meId = me?.id;
 
-  const submit = (tid, text) => { const ai = mockAiScore(text); patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, submittedAt: nowLocal(), ai } : t)) })); setSubmitFor(null); return ai; };
+  const submit = async (tid, text, files) => { const at = nowLocal(); const r = await detectAI(text); patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, submittedAt: at, ai: r.ai, aiSrc: r.source, text: text.trim(), files: files || [] } : t)) })); return { ...r, submittedAt: at }; };
+  const addFolder = (name) => patch((pr) => ({ ...pr, folders: [...(pr.folders || []), { id: "f" + Date.now(), name }] }));
+  const renameFolder = (id, name) => patch((pr) => ({ ...pr, folders: (pr.folders || []).map((f) => (f.id === id ? { ...f, name } : f)) }));
+  const removeFolder = (id) => patch((pr) => ({ ...pr, folders: (pr.folders || []).filter((f) => f.id !== id), tasks: pr.tasks.map((t) => (t.folderId === id ? { ...t, folderId: null } : t)) }));
+  const moveTask = (tid, folderId) => patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, folderId: folderId || null } : t)) }));
   const addTask = (title, owner, due) => patch((pr) => ({ ...pr, tasks: [...pr.tasks, { id: "t" + Date.now(), title, owner, due, submittedAt: null, ai: null }], chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: `과업 등록: ${title} · 담당 ${pr.members.find((m) => m.id === owner)?.name} · 마감 ${fmt(due)}`, ts: Date.now() }] }));
   const sendMsg = (text) => patch((pr) => ({ ...pr, chat: [...pr.chat, { id: "c" + Date.now(), sender: meId, text, ts: Date.now() }] }));
   const submitPeer = (from, entries) => patch((pr) => ({ ...pr, peerEvals: [...pr.peerEvals.filter((e) => e.from !== from), ...entries.map((e) => ({ from, ...e }))] }));
   const endProject = () => patch((pr) => ({ ...pr, ended: true, chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: "프로젝트가 종료되었습니다. 이제 익명 동료평가를 제출할 수 있어요.", ts: Date.now() }] }));
   const setMemberRole = (id, role) => patch((pr) => ({ ...pr, members: pr.members.map((m) => (m.id === id ? { ...m, role } : m)) }));
 
-  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
+  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
 
   return (
     <div>
@@ -672,6 +816,7 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
         {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
         {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && !t.submittedAt && setSubmitFor(t)} />}
         {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} />}
+        {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
         {tab === "score" && <ScoreTab members={p.members} tasks={p.tasks} meId={meId} />}
         {tab === "peer" && <PeerTab key={meId} members={p.members} peerEvals={p.peerEvals} meId={meId} ended={!!p.ended} isLeader={!!me?.leader} onEnd={endProject} onSubmit={submitPeer} />}
         {tab === "team" && <TeamTab members={p.members} tasks={p.tasks} me={me} setRole={setMemberRole} />}
@@ -907,6 +1052,150 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
   );
 }
 
+/* ---------- 팀 자료실: 팀원이 제출한 글·파일을 한 화면에 모으고, 팀장이 폴더로 정리 ---------- */
+function BoardTab({ members, tasks, folders, isLeader, addFolder, renameFolder, removeFolder, moveTask }) {
+  const [filter, setFilter] = useState("all");
+  const [adding, setAdding] = useState(false); const [newName, setNewName] = useState("");
+  const [editId, setEditId] = useState(null); const [editName, setEditName] = useState("");
+  const [delId, setDelId] = useState(null);
+  const [openIds, setOpenIds] = useState({}); const [allOpen, setAllOpen] = useState(false);
+  const subs = tasks.filter((t) => t.submittedAt).slice().sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+  const inFolder = (t, fid) => (fid === "none" ? !t.folderId || !folders.some((f) => f.id === t.folderId) : t.folderId === fid);
+  const sections = [...folders.map((f) => ({ id: f.id, name: f.name, folder: true })), { id: "none", name: "미분류", folder: false }];
+  const cur = filter === "all" || filter === "none" || folders.some((f) => f.id === filter) ? filter : "all";
+  const fileCount = subs.reduce((n, t) => n + (t.files ? t.files.length : 0), 0);
+  const isOpen = (t) => allOpen || !!openIds[t.id];
+  const mk = () => { const n = newName.trim(); if (!n) return; addFolder(n); setNewName(""); setAdding(false); };
+  const chip = (id, label, n) => <button key={id} onClick={() => setFilter(id)} className="rounded-full px-3 py-1.5" style={{ fontSize: 13, fontWeight: 700, color: cur === id ? "#fff" : C.muted, background: cur === id ? C.primary : "#fff", border: `1px solid ${cur === id ? C.primary : C.line}` }}>{label} <span style={{ opacity: 0.8, fontWeight: 600 }}>{n}</span></button>;
+
+  const Item = ({ t }) => {
+    const m = members.find((x) => x.id === t.owner); const st = statusOf(t), M = SM[st];
+    const long = (t.text || "").length > 90; const open = isOpen(t);
+    return (
+      <div className="rounded-xl px-3.5 py-3" style={{ background: "#fff", border: `1px solid ${C.line}` }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          {m && <Avatar m={m} sm />}<span style={{ fontWeight: 700, fontSize: 14 }}>{m?.name}</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>· {t.title}</span>
+          <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: M.color, background: M.soft }}><M.Icon size={11} /> {M.label}{st === "late" ? ` · ${fmtLate(lateMs(t))} 지각` : ""}</span>
+          <span style={{ fontSize: 12, color: C.muted }}>제출 {fmt(t.submittedAt)}</span>
+          {isLeader && folders.length > 0 && (
+            <label className="ml-auto inline-flex items-center gap-1" style={{ fontSize: 12, color: C.muted }}><Folder size={12} />
+              <select value={t.folderId && folders.some((f) => f.id === t.folderId) ? t.folderId : ""} onChange={(e) => moveTask(t.id, e.target.value)} className="rounded-md px-1.5 py-1" style={{ fontSize: 12, fontWeight: 700, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, outline: "none" }}>
+                <option value="">미분류</option>{folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        {t.text ? (
+          <div className="mt-2" style={{ fontSize: 13, color: C.ink, lineHeight: 1.65, whiteSpace: "pre-wrap", ...(open ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }) }}>{t.text}</div>
+        ) : <div className="mt-2" style={{ fontSize: 12, color: C.muted }}>작성한 글 없이 파일만 제출했어요.</div>}
+        {long && !allOpen && <button onClick={() => setOpenIds({ ...openIds, [t.id]: !openIds[t.id] })} style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginTop: 4 }}>{open ? "접기" : "더보기"}</button>}
+        <FileChips files={t.files} />
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <Card className="mb-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2"><FolderOpen size={18} color={C.primary} /><SectionTitle>팀 자료실</SectionTitle></div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => setAllOpen(!allOpen)} className="fw-ghost rounded-xl px-3 py-1.5" style={{ fontSize: 13, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}`, color: C.ink }}>{allOpen ? "내용 접기" : "내용 모두 펼치기"}</button>
+            {isLeader && !adding && <PrimaryBtn onClick={() => setAdding(true)}><FolderPlus size={15} /> 폴더 만들기</PrimaryBtn>}
+          </div>
+        </div>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 6 }}>팀원이 제출한 글과 파일이 한곳에 모입니다. 파일을 하나하나 열어보지 않아도 모두의 결과물을 이 화면에서 바로 확인하세요. {isLeader ? "팀장은 폴더를 만들고 제출물을 정리할 수 있어요." : "폴더 정리는 팀장이 합니다."}</div>
+        <div className="flex gap-2 flex-wrap mt-2" style={{ fontSize: 12, color: C.muted }}><span>제출 <b style={{ color: C.ink }}>{subs.length}건</b></span><span>첨부 파일 <b style={{ color: C.ink }}>{fileCount}개</b></span><span>폴더 <b style={{ color: C.ink }}>{folders.length}개</b></span></div>
+        {adding && (
+          <div className="flex gap-2 mt-3 flex-wrap">
+            <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") mk(); }} placeholder="폴더 이름 (예: 시장조사, 발표자료)" className="rounded-md px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", flex: 1, minWidth: 180 }} />
+            <PrimaryBtn onClick={mk} disabled={!newName.trim()}>만들기</PrimaryBtn><GhostBtn onClick={() => { setAdding(false); setNewName(""); }}>취소</GhostBtn>
+          </div>
+        )}
+      </Card>
+
+      <div className="flex gap-2 flex-wrap mb-3">
+        {chip("all", "전체", subs.length)}
+        {folders.map((f) => chip(f.id, f.name, subs.filter((t) => inFolder(t, f.id)).length))}
+        {chip("none", "미분류", subs.filter((t) => inFolder(t, "none")).length)}
+      </div>
+
+      {subs.length === 0 ? <Empty title="아직 제출된 자료가 없어요" sub="팀원이 과업을 제출하면 이곳에 자동으로 모여요." /> : (
+        <div className="grid gap-4">
+          {sections.map((sec) => {
+            if (!(cur === "all" || cur === sec.id)) return null;
+            const items = subs.filter((t) => inFolder(t, sec.id));
+            if (sec.id === "none" && items.length === 0 && cur === "all") return null;
+            return (
+              <div key={sec.id}>
+                <div className="flex items-center gap-2 mb-2">
+                  {sec.folder ? <Folder size={16} color={C.primary} /> : <FolderOpen size={16} color={C.muted} />}
+                  {editId === sec.id ? (
+                    <><input autoFocus value={editName} onChange={(e) => setEditName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && editName.trim()) { renameFolder(sec.id, editName.trim()); setEditId(null); } }} className="rounded-md px-2 py-1" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none" }} />
+                      <button onClick={() => { if (editName.trim()) { renameFolder(sec.id, editName.trim()); setEditId(null); } }} style={{ fontSize: 12, fontWeight: 700, color: C.primary }}>저장</button><button onClick={() => setEditId(null)} style={{ fontSize: 12, color: C.muted }}>취소</button></>
+                  ) : <span style={{ fontWeight: 800, fontSize: 15 }}>{sec.name}</span>}
+                  <span style={{ fontSize: 12, color: C.muted }}>{items.length}건</span>
+                  {isLeader && sec.folder && editId !== sec.id && (
+                    <span className="ml-auto inline-flex items-center gap-2">
+                      {delId === sec.id ? (
+                        <><span style={{ fontSize: 12, color: C.red }}>폴더를 삭제할까요? 안의 자료는 미분류로 이동해요.</span><button onClick={() => { removeFolder(sec.id); setDelId(null); setFilter("all"); }} style={{ fontSize: 12, fontWeight: 700, color: C.red }}>삭제</button><button onClick={() => setDelId(null)} style={{ fontSize: 12, color: C.muted }}>취소</button></>
+                      ) : (
+                        <><button onClick={() => { setEditId(sec.id); setEditName(sec.name); }} aria-label="폴더 이름 바꾸기" style={{ color: C.muted }}><Pencil size={14} /></button><button onClick={() => setDelId(sec.id)} aria-label="폴더 삭제" style={{ color: C.muted }}><Trash2 size={14} /></button></>
+                      )}
+                    </span>
+                  )}
+                </div>
+                {items.length === 0 ? <div className="rounded-xl px-4 py-3" style={{ fontSize: 12, color: C.muted, background: "#fff", border: `1px dashed ${C.line}` }}>{sec.folder ? (isLeader ? "비어 있어요. 아래 제출물의 '폴더 이동'에서 이 폴더를 고르면 여기에 담겨요." : "비어 있는 폴더예요.") : "정리할 자료가 없어요."}</div>
+                  : <div className="grid gap-2">{items.map((t) => <Item key={t.id} t={t} />)}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 점수 산정 기준 안내 ---------- */
+function ScoreRules() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-3">
+      <button onClick={() => setOpen(!open)} className="inline-flex items-center gap-1" style={{ fontSize: 13, fontWeight: 700, color: C.primary }}><ClipboardCheck size={14} /> 점수 산정 기준 {open ? "접기" : "보기"} <ChevronRight size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .18s" }} /></button>
+      {open && (
+        <div className="rounded-xl px-4 py-3 mt-2 grid gap-4" style={{ background: "#F7F8FC", border: `1px solid ${C.line}` }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>① 정시 제출 점수 (과업별 · 마감 후 늦은 시간 기준)</div>
+            {LATE_TIERS.map((x) => (
+              <div key={x.key} className="flex items-center gap-2 py-1" style={{ fontSize: 13, borderBottom: `1px dashed ${C.line}` }}>
+                <span style={{ flex: 1, fontWeight: 600 }}>{x.label}</span><span style={{ flex: 1.4, color: C.muted }}>{x.range}</span>
+                <span style={{ fontWeight: 800, width: 48, textAlign: "right", color: x.pts >= 80 ? C.green : x.pts >= 40 ? C.amber : C.red }}>{x.pts}점</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>② AI 인정 계수 (AI 점검 % 기준)</div>
+            {[["30% 미만", "독자적 작성 추정", "100%", C.green], ["30% ~ 60%", "일부 의심", "70%", C.amber], ["60% 초과", "AI 복붙 의심 · 교수님 확인 대상", "30%", C.red]].map(([a, b, c, col]) => (
+              <div key={a} className="flex items-center gap-2 py-1" style={{ fontSize: 13, borderBottom: `1px dashed ${C.line}` }}>
+                <span style={{ flex: 1, fontWeight: 600 }}>{a}</span><span style={{ flex: 1.4, color: C.muted }}>{b}</span><span style={{ fontWeight: 800, width: 48, textAlign: "right", color: col }}>{c}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 800, marginBottom: 2 }}>③ 계산 방법</div>
+            • <b>정시 제출</b> = 과업별 정시 제출 점수의 평균<br />
+            • <b>AI 독자성</b> = 제출한 과업의 AI 인정 계수 평균<br />
+            • <b>기여도</b> = 과업별 (정시 제출 점수 × AI 인정 계수)의 평균<br />
+            • <b>종합점수</b> = 위 세 항목의 평균 (마감 전·진행 중인 과업은 계산에서 제외)
+          </div>
+          <div style={{ fontSize: 12, color: C.muted }}>구간과 점수는 시제품 기본값이며, 정식 서비스에서는 교수님이 과제별로 조정할 수 있게 할 예정입니다. AI 점검은 참고 근거이고 최종 판단은 교수님이 합니다.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- SCORE (기여도 분석) ---------- */
 function ScoreTab({ members, tasks, meId }) {
   const [openId, setOpenId] = useState(null);
@@ -918,6 +1207,7 @@ function ScoreTab({ members, tasks, meId }) {
       <Card className="mb-4">
         <div className="flex items-center justify-between"><SectionTitle>기여도 분석</SectionTitle>{risk.length > 0 && <span className="inline-flex items-center gap-1 rounded-full px-3 py-1" style={{ fontSize: 12, fontWeight: 600, color: C.red, background: C.redSoft }}><AlertTriangle size={14} /> 검토 대상 {risk.length}명</span>}</div>
         <div style={{ fontSize: 13, color: C.muted, marginTop: 4, marginBottom: 12 }}>점수 근거는 딱 두 가지입니다. <b>① 정시 제출 여부</b> <b>② AI 복붙 여부</b>. 이를 바탕으로 개인별 <b>기여도·정시 제출·AI 독자성</b>을 0~100으로 자동 산출하고, 막대는 3개 항목의 평균(종합점수)입니다. 카드를 누르면 <b>근거</b>를 볼 수 있어요. 협업·소통은 종료 후 동료평가(정성)에서 다룹니다.</div>
+        <ScoreRules />
         <div style={{ width: "100%", height: 210 }}>
           <ResponsiveContainer>
             <BarChart data={data} layout="vertical" margin={{ left: 6, right: 44, top: 0, bottom: 0 }}>
@@ -950,7 +1240,7 @@ function ScoreTab({ members, tasks, meId }) {
           );
         })}
       </div>
-      <div className="rounded-xl px-4 py-3 mt-4 flex items-start gap-2" style={{ background: "#fff", border: `1px solid ${C.line}`, fontSize: 13, color: C.muted }}><AlertTriangle size={16} color={C.amber} style={{ marginTop: 1, flexShrink: 0 }} /><span><b style={{ color: C.ink }}>AI 복붙 점검은 점수 근거 중 하나이지만 확정 판정이 아닙니다.</b> 오탐 가능성이 있어 교수님이 근거를 직접 확인하도록 표시만 하며, 최종 평가는 교수님이 합니다. 데모용 추정이며 실제 서비스에서는 검증된 탐지 API로 대체됩니다.</span></div>
+      <div className="rounded-xl px-4 py-3 mt-4 flex items-start gap-2" style={{ background: "#fff", border: `1px solid ${C.line}`, fontSize: 13, color: C.muted }}><AlertTriangle size={16} color={C.amber} style={{ marginTop: 1, flexShrink: 0 }} /><span><b style={{ color: C.ink }}>AI 복붙 점검은 점수 근거 중 하나이지만 확정 판정이 아닙니다.</b> 오탐 가능성이 있어 교수님이 근거를 직접 확인하도록 표시만 하며, 최종 평가는 교수님이 합니다. 시제품에서는 시연용 추정을 사용하며, 실제 AI 탐지 API는 사업화 단계에서 연동합니다. 점검 출처는 과업별 근거표에 표시됩니다.</span></div>
     </div>
   );
 }
@@ -1049,22 +1339,59 @@ function RolePicker({ value, onChange }) {
 
 /* ---------- SUBMIT MODAL ---------- */
 function SubmitModal({ task, onClose, onSubmit }) {
-  const [text, setText] = useState(""); const [result, setResult] = useState(null); const done = result != null;
+  const [text, setText] = useState(""); const [result, setResult] = useState(null); const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState([]); const [fileErr, setFileErr] = useState("");
+  const done = result != null; const len = text.trim().length;
+  const MAX_FILES = 5, MAX_MB = 10;
+  const pickFiles = (e) => {
+    const picked = Array.from(e.target.files || []); e.target.value = ""; if (!picked.length) return;
+    let err = ""; const next = files.slice();
+    picked.forEach((f) => {
+      if (next.length >= MAX_FILES) { err = `파일은 최대 ${MAX_FILES}개까지 첨부할 수 있어요.`; return; }
+      if (f.size > MAX_MB * 1048576) { err = `${f.name}: ${MAX_MB}MB를 넘어서 첨부할 수 없어요.`; return; }
+      next.push({ id: "f" + Date.now() + next.length, name: f.name, size: f.size, url: URL.createObjectURL(f) });
+    });
+    setFiles(next); setFileErr(err);
+  };
+  const nowDue = task.due ? Date.now() - new Date(task.due).getTime() : 0;
+  const nowLate = nowDue > 0;
+  const nowTier = nowLate ? LATE_TIERS.slice(1, 5).find((x) => nowDue <= x.max) : null;
+  const go = async () => { if (!text.trim() || busy) return; setBusy(true); const r = await onSubmit(task.id, text, files); const lm = task.due ? new Date(r.submittedAt).getTime() - new Date(task.due).getTime() : 0; setResult({ ...r, late: lm > 0 ? lm : 0, tier: lm > 0 ? LATE_TIERS.slice(1, 5).find((x) => lm <= x.max) : null }); setBusy(false); };
+  const flagged = done && isFlagged(result.ai);
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4" style={{ background: "rgba(20,22,43,0.5)", backdropFilter: "blur(3px)", zIndex: 50 }} onClick={onClose}>
       <div className="fw-fade rounded-2xl w-full" style={{ maxWidth: 520, background: "#fff", boxShadow: SH.pop }} onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.line}` }}><div className="flex items-center gap-2"><Search size={16} color={C.primary} /><span style={{ fontWeight: 700 }}>자료 제출 · 이해도 확인</span></div><button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button></div>
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${C.line}` }}><div className="flex items-center gap-2"><Search size={16} color={C.primary} /><span style={{ fontWeight: 700 }}>자료 제출 · AI 복붙 점검</span></div><button onClick={onClose} style={{ color: C.muted }}><X size={18} /></button></div>
         <div className="px-5 py-4">
           <div style={{ fontSize: 13, color: C.muted }}>과업</div><div style={{ fontWeight: 700, marginBottom: 4 }}>{task.title}</div>
           <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>마감 {fmt(task.due)}</div>
+          {!done && nowLate && <div className="rounded-lg px-3 py-2 mb-3" style={{ fontSize: 12, background: C.amberSoft, color: "#8A5300" }}><b>마감이 {fmtLate(nowDue)} 지났어요.</b> 지금 제출하면 지연 제출로 기록되고, 정시 제출 점수는 <b>{nowTier.pts}점</b>({nowTier.label})이 반영돼요.</div>}
           {!done ? (
             <>
-              <div style={{ fontSize: 13, color: C.ink, marginBottom: 6 }}>찾은 자료를 <b>본인 언어로 정리</b>해 붙여넣어 주세요. 그대로 복붙하면 AI 추정치가 높게 잡혀 검토 대상이 됩니다.</div>
+              <div style={{ fontSize: 13, color: C.ink, marginBottom: 6 }}>찾은 자료를 <b>본인 언어로 정리</b>해 붙여넣어 주세요. 제출하면 AI 탐지로 복붙 여부를 점검하고, 점검 결과는 기여도 근거로 기록됩니다.</div>
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder="예) 찾아보니 이 시장은 ~한 구조였고, 내 생각엔 ~ 때문에 우리 제품에 이렇게 적용하면 될 것 같다..." className="w-full rounded-lg px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} />
-              <div className="flex gap-2 mt-3"><button onClick={() => setResult(onSubmit(task.id, text))} disabled={!text.trim()} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() ? C.green : "#A9C9B6" }}>제출하고 검사</button><button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
+              <div className="flex items-center justify-between mt-1" style={{ fontSize: 12, color: C.muted }}><span>{len}자</span></div>
+              <div className="mt-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 cursor-pointer" style={{ fontSize: 13, fontWeight: 600, color: C.primary, background: "#EEF2FF", border: "1px solid #D9E1FB" }}><Paperclip size={14} /> 참고 파일 첨부 (선택)<input type="file" multiple onChange={pickFiles} style={{ display: "none" }} /></label>
+                  <span style={{ fontSize: 11, color: C.muted }}>최대 {MAX_FILES}개 · 파일당 {MAX_MB}MB · 한글/워드/PPT/PDF/이미지 등</span>
+                </div>
+                {files.length > 0 && <div className="flex gap-1.5 flex-wrap mt-2">{files.map((f) => <span key={f.id} className="inline-flex items-center gap-1 rounded-md px-2 py-1" style={{ fontSize: 12, fontWeight: 600, background: "#F4F6FC", border: `1px solid ${C.line}` }}><Paperclip size={11} /> <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span> <span style={{ color: C.muted, fontWeight: 400 }}>{fmtSize(f.size)}</span><button onClick={() => setFiles(files.filter((x) => x.id !== f.id))} aria-label="첨부 삭제" style={{ color: C.muted }}><X size={12} /></button></span>)}</div>}
+                {fileErr && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{fileErr}</div>}
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>첨부 파일은 참고 자료로만 저장되고, AI 점검은 위에 작성한 글에만 적용됩니다. 제출한 글과 파일은 팀 자료실에 모입니다.</div>
+              </div>
+              <div className="flex gap-2 mt-3"><button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : "제출하고 검사"}</button><button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
             </>
           ) : (
-            <div className="rounded-xl px-4 py-4 text-center" style={{ background: isFlagged(result) ? C.redSoft : C.greenSoft }}><div style={{ fontSize: 13, color: C.muted }}>AI 작성 추정치</div><div style={{ fontSize: 32, fontWeight: 800, color: isFlagged(result) ? C.red : C.green }}>{result}%</div><div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{isFlagged(result) ? "높음 → 검토 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : "양호 → 본인 정리로 인정됩니다. 제출 완료!"}</div><button onClick={onClose} className="rounded-md px-4 py-2 mt-3" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button></div>
+            <div className="rounded-xl px-4 py-4 text-center" style={{ background: flagged ? C.redSoft : C.greenSoft }}>
+              <div style={{ fontSize: 13, color: C.muted }}>AI 작성 추정치</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: flagged ? C.red : C.green }}>{result.ai}%</div>
+              <div className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 mt-1" style={{ fontSize: 11, fontWeight: 700, background: "#fff", color: result.source === "copyleaks" ? C.primary : C.muted }}>{AI_SRC[result.source]}</div>
+              {result.note && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{result.note}</div>}
+              <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>{result.late > 0 ? <>지연 제출 · <b>{fmtLate(result.late)}</b> 지각 → 정시 점수 <b>{result.tier.pts}점</b></> : <>정시 제출 → 정시 점수 <b>100점</b></>}{files.length > 0 && <> · 참고 파일 {files.length}개 첨부</>}</div>
+              <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "높음 → 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : "양호 → 본인 정리로 인정됩니다. 제출 완료!"}</div>
+              <button onClick={onClose} className="rounded-md px-4 py-2 mt-3" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button>
+            </div>
           )}
         </div>
       </div>
@@ -1077,25 +1404,58 @@ function SubmitModal({ task, onClose, onSubmit }) {
 function EvidenceList({ member, tasks }) {
   const mine = tasks.filter((t) => t.owner === member.id).slice().sort((a, b) => new Date(a.due) - new Date(b.due));
   if (mine.length === 0) return <div style={{ fontSize: 12, color: C.muted }}>배정된 과업이 없습니다.</div>;
+  return <div className="grid gap-1.5">{mine.map((t) => <EvidenceRow key={t.id} t={t} />)}</div>;
+}
+function EvidenceRow({ t }) {
+  const [open, setOpen] = useState(false);
+  const st = statusOf(t), M = SM[st];
+  const tp = timePts(t);
+  const pts = tp == null ? null : Math.round((tp / 100) * authFactor(t.ai) * 100);
+  const ms = lateMs(t);
+  const lateTxt = st === "late" ? `${fmtLate(ms)} 지각` : null;
+  const hasContent = !!(t.text || (t.files && t.files.length));
   return (
-    <div className="grid gap-1.5">
-      {mine.map((t) => {
-        const st = statusOf(t), M = SM[st];
-        const pts = st === "pending" ? null : st === "missed" ? 0 : Math.round(M.w * authFactor(t.ai) * 100);
-        return (
-          <div key={t.id} className="rounded-lg px-3 py-2" style={{ background: "#F7F8FC", border: `1px solid ${C.line}` }}>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span style={{ fontWeight: 700, fontSize: 13 }}>{t.title}</span>
-              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: M.color, background: M.soft }}><M.Icon size={11} /> {M.label}</span>
-              <span className="ml-auto" style={{ fontSize: 12, fontWeight: 800, color: pts == null ? C.muted : pts >= 80 ? C.green : pts >= 50 ? C.amber : C.red }}>{pts == null ? "집계 전" : `${pts}점 반영`}</span>
+    <div className="rounded-lg px-3 py-2" style={{ background: "#F7F8FC", border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span style={{ fontWeight: 700, fontSize: 13 }}>{t.title}</span>
+        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: M.color, background: M.soft }}><M.Icon size={11} /> {M.label}{lateTxt ? ` · ${lateTxt}` : ""}</span>
+        <span className="ml-auto" style={{ fontSize: 12, fontWeight: 800, color: pts == null ? C.muted : pts >= 80 ? C.green : pts >= 50 ? C.amber : C.red }}>{pts == null ? "집계 전" : `${pts}점 반영`}</span>
+      </div>
+      <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-1" style={{ fontSize: 12, color: C.muted }}>
+        <span>마감 {fmt(t.due)}</span>
+        <span>제출 {t.submittedAt ? fmt(t.submittedAt) : "—"}</span>
+        <span style={{ color: isFlagged(t.ai) ? C.red : C.muted, fontWeight: isFlagged(t.ai) ? 700 : 400 }}>AI 점검 {t.ai == null ? "—" : `${t.ai}% · ${AI_LABEL(t.ai)}`}{t.ai != null && <span style={{ fontWeight: 400, color: C.muted }}> ({AI_SRC[t.aiSrc] || "샘플 데이터"})</span>}</span>
+      </div>
+      {tp != null && (
+        <div className="mt-1" style={{ fontSize: 12, color: C.muted }}>
+          정시 점수 <b style={{ color: C.ink }}>{tp}점</b>{st === "late" ? ` (${LATE_TIERS.find((x) => x.pts === tp && x.key !== "missed")?.label})` : st === "missed" ? " (미제출)" : ""}
+          {st !== "missed" && <> × AI 인정 <b style={{ color: C.ink }}>{Math.round(authFactor(t.ai) * 100)}%</b> = <b style={{ color: C.ink }}>{pts}점</b></>}
+        </div>
+      )}
+      {hasContent && (
+        <div className="mt-1.5">
+          <button onClick={() => setOpen(!open)} className="inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 700, color: C.primary }}><FileText size={12} /> {open ? "제출 내용 닫기" : "제출 내용 보기"}{t.files && t.files.length > 0 ? ` · 첨부 ${t.files.length}개` : ""}</button>
+          {open && (
+            <div className="rounded-md px-3 py-2 mt-1.5" style={{ background: "#fff", border: `1px solid ${C.line}` }}>
+              {t.text && <div style={{ fontSize: 13, color: C.ink, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{t.text}</div>}
+              <FileChips files={t.files} />
             </div>
-            <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-1" style={{ fontSize: 12, color: C.muted }}>
-              <span>마감 {fmt(t.due)}</span>
-              <span>제출 {t.submittedAt ? fmt(t.submittedAt) : "—"}</span>
-              <span style={{ color: isFlagged(t.ai) ? C.red : C.muted, fontWeight: isFlagged(t.ai) ? 700 : 400 }}>AI 점검 {t.ai == null ? "—" : `${t.ai}% · ${AI_LABEL(t.ai)}`}</span>
-            </div>
-          </div>
-        );
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+function FileChips({ files }) {
+  if (!files || files.length === 0) return null;
+  return (
+    <div className="flex gap-1.5 flex-wrap mt-2">
+      {files.map((f) => {
+        const body = <><Paperclip size={12} /> <span style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span> <span style={{ color: C.muted, fontWeight: 400 }}>{fmtSize(f.size)}</span>{f.url && <Download size={12} />}</>;
+        const st = { fontSize: 12, fontWeight: 600, color: C.ink, background: "#EEF2FF", border: `1px solid #D9E1FB` };
+        return f.url
+          ? <a key={f.id} href={f.url} download={f.name} className="inline-flex items-center gap-1 rounded-md px-2 py-1" style={st}>{body}</a>
+          : <span key={f.id} className="inline-flex items-center gap-1 rounded-md px-2 py-1" style={st} title="샘플 데이터라 실제 파일은 없습니다">{body}</span>;
       })}
     </div>
   );
