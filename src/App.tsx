@@ -62,6 +62,7 @@ const fromNow = (n, hh = 23, mm = 59) => { const d = new Date(today); d.setDate(
 const fmt = (s) => { if (!s) return "미정"; const d = new Date(s); if (isNaN(d)) return s; return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtKor = (s) => { if (!s) return "미정"; const d = new Date(s); if (isNaN(d)) return s; return `${d.getMonth() + 1}월 ${d.getDate()}일, ${pad(d.getHours())}:${pad(d.getMinutes())}까지`; };
 const inHours = (h) => { const d = new Date(Date.now() + h * 3600000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const D = (m, d, hh = 0, mm = 0) => `2026-${pad(m)}-${pad(d)}T${pad(hh)}:${pad(mm)}`; // 시연용 고정 날짜(2026년)
 const dateKey = (s) => (s ? s.slice(0, 10) : "");
 const hhmm = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
@@ -89,9 +90,9 @@ function mockAiScore(text) {
   if (SAMPLE_MARKERS.filter((m) => t.includes(m.replace(/\s+/g, ""))).length >= 3) return 99;
   let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 9973;
   const n = t.length;
-  if (n < 150) return 5 + (h % 15);                                 // 5~19%
-  if (n < 400) return 25 + Math.round(((n - 150) / 250) * 45);       // 25~70%
-  if (n < 800) return 75 + Math.round(((n - 400) / 400) * 20);       // 75~95%
+  if (n < 150) return 5 + (h % 15);                                 // 5~19%   : 사용하지 않았을 가능성 높음
+  if (n < 300) return 32 + Math.round(((n - 150) / 150) * 34);       // 32~66%  : 일부 사용 가능성
+  if (n < 600) return 75 + Math.round(((n - 300) / 300) * 20);       // 75~95%  : AI 사용 의심(길게 붙여넣은 글)
   return 96 + (h % 3);                                               // 96~98%
 }
 /* ---------- AI 탐지 호출 ----------
@@ -114,8 +115,15 @@ async function detectAI(text) {
     return demo("AI 탐지 서버에서 결과를 받지 못해 시연용 추정으로 계산했어요.");
   } catch (e) { return demo("AI 탐지 서버에 연결하지 못해 시연용 추정으로 계산했어요."); }
 }
-const authFactor = (ai) => (ai == null ? 0 : ai < 30 ? 1 : ai <= 60 ? 0.7 : 0.3);
-const isFlagged = (ai) => ai != null && ai > 60;
+/* ---------- AI 점검 3구간 (감점이 억울하지 않도록 '확실할 때만' 크게 반영) ----------
+   0~29%  : 사용하지 않았을 가능성 높음 → 감점 없음(100%)
+   30~69% : 일부 사용 가능성          → 소폭 반영(85%), 교수 확인 대상은 아님
+   70~100%: 사용 의심(검토·수정 안 한 정황) → 크게 반영(30%), 교수 확인 대상
+   ※ 구간 경계(30·70)는 시제품 정책값입니다. 근거로 삼은 공개 자료: Turnitin(20% 미만은 신뢰도 낮음·오탐 가능성 높음),
+      GPTZero(AI 판정 기준 예시 65%·80%). AI 탐지 도구 전체에 통용되는 공식 기준표는 없습니다. */
+const AI_LOW = 30, AI_HIGH = 70;
+const authFactor = (ai) => (ai == null ? 0 : ai < AI_LOW ? 1 : ai < AI_HIGH ? 0.85 : 0.3);
+const isFlagged = (ai) => ai != null && ai >= AI_HIGH;
 
 /* ---------- 정시 제출 점수표 (마감 후 늦은 시간에 따라) ----------
    정시 100 · 마감 1초 후~3시간 80 · 3시간 초과~24시간 60 · 24시간 초과~3일 미만 40 · 3일 이상 20 · 미제출 0
@@ -176,7 +184,7 @@ const isRisk = (s) => s.flags > 0 || (s.assigned > 0 && s.overall < 40);
 const AUTO_DIMS = [
   { k: "contribution", label: "기여도" }, { k: "timeliness", label: "정시 제출" }, { k: "quality", label: "AI 독자성" },
 ];
-const AI_LABEL = (ai) => (ai == null ? "—" : ai < 30 ? "독자적 작성 추정" : ai <= 60 ? "일부 의심" : "AI 복붙 의심");
+const AI_LABEL = (ai) => (ai == null ? "—" : ai < AI_LOW ? "사용하지 않았을 가능성 높음" : ai < AI_HIGH ? "일부 사용 가능성" : "AI 사용 의심");
 const PEER_DIMS = [
   { k: "contribution", label: "기여도", desc: "실제 산출물을 만들어냈는가" },
   { k: "timeliness", label: "성실성", desc: "기한·약속을 지켰는가" },
@@ -205,46 +213,60 @@ const seedSubjects = [
   { id: "sub1", name: "마케팅관리", roster: SEED_STUDENTS.slice() },
 ];
 const seedAssignments = [
-  { id: "a1", subjectId: "sub1", title: "마케팅 관리 과제", desc: "팀 프로젝트 주제를 정해 외부·내부 환경 분석, 제품 시연, 가격 설정까지 정리해 발표합니다.", finalDue: fromNow(5, 23, 59) },
+  { id: "a1", subjectId: "sub1", title: "마케팅 기획 프로젝트", desc: "팀 프로젝트 주제를 정해 외부·내부 환경 분석, 제품 시연, 가격 설정까지 정리하고, 실제로 디지털경영학과 학생들에게 판매한다고 가정해 마케팅 전략을 수립한 뒤 발표합니다.", finalDue: D(10, 17, 23, 59) },
 ];
+const PROF_NAME = "남가영";
 const ROLE_PRESETS = ["팀장", "자료조사", "자료취합", "문서작성", "발표"];
-const t0 = new Date(today); t0.setHours(9, 12, 0);
-const t1 = new Date(today); t1.setHours(9, 20, 0);
-// ※ 시연용 샘플 데이터입니다(마감일은 접속 시각 기준으로 자동 계산).
+// ※ 시연용 샘플 데이터입니다. 과업 내용은 2026-10-10 팀 회의 기록(마케팅 전략 수립 및 최종 발표자료 구성)을 바탕으로 구성했습니다.
+//   · 시연 시점: 프로젝트 종료 후 동료평가만 남은 상태 (김종성·이유진 평가 완료, 송대희는 시연 중 작성)
+//   · 시연 과업: 송대희 '발표 대본 정리 및 팀원 역할 배분' (10/17 12:30 마감) — 시연 중 AI 글을 붙여 제출
 const seedProjects = [
   {
-    id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: fromNow(5, 23, 59), assignmentTitle: "마케팅 관리 과제", ended: false, sample: true,
+    id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: D(10, 17, 23, 59), assignmentTitle: "마케팅 기획 프로젝트", ended: true, sample: true,
     members: [
       { id: "m1", sid: "2026230002", name: "김종성", role: "자료조사", leader: false, color: AVATARS[0] },
       { id: "m2", sid: "2026230010", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
       { id: "m3", sid: "2026230006", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
     ],
-    folders: [{ id: "f1", name: "시장·경쟁 조사" }, { id: "f2", name: "기획·발표" }],
+    folders: [{ id: "f1", name: "환경 분석" }, { id: "f2", name: "STP·4P 전략" }],
     tasks: [
-      { id: "t1", title: "주제 선정 & 시장 리서치", owner: "m1", due: fromNow(-8, 18, 0), submittedAt: fromNow(-9, 21, 30), ai: 15, folderId: "f1",
-        text: "국내 대학 팀프로젝트에서 쓰는 협업 도구를 조사했다. 노션·구글독스는 같이 쓰기는 편하지만 '누가 얼마나 했는지'는 남지 않는다는 점이 가장 큰 빈틈이었다. 이 빈틈을 기여 근거 기록으로 메우는 방향으로 주제를 잡았다.", files: [] },
-      { id: "t2", title: "경쟁사례 조사 5건", owner: "m1", due: fromNow(-3, 23, 59), submittedAt: fromNow(-4, 20, 10), ai: 42, folderId: "f1",
-        text: "CATME, Buddycheck, 노션, 구글독스, 팀즈 5개를 비교했다. 해외 도구는 동료평가 중심이라 평가 시점이 끝난 뒤이고, 국내 도구는 기록 자체가 없다. 제출 시각과 AI 점검을 근거로 남기는 곳은 찾지 못했다.", files: [{ id: "sf1", name: "경쟁사례_비교표.xlsx", size: 18432 }] },
-      { id: "t3", title: "자료조사 (환경분석 근거)", owner: "m1", due: fromNow(5, 18, 0), submittedAt: null, ai: null },
-      { id: "t4", title: "발표 슬라이드 초안", owner: "m2", due: fromNow(-6, 12, 0), submittedAt: fromNow(-6, 9, 10), ai: 28, folderId: "f2",
-        text: "슬라이드는 문제 제기, 제품 소개, 환경 분석, 시연, 결론 순서로 잡았다. 문제 제기는 팀플 경험 때문에 공감하기 쉬운 '무임승차' 사례로 시작한다.", files: [{ id: "sf2", name: "슬라이드_초안.pptx", size: 412000 }] },
-      { id: "t5", title: "설문지 설계", owner: "m2", due: fromNow(-3, 12, 0), submittedAt: fromNow(-2, 1, 40), ai: 68,
-        text: "설문은 팀플 경험 유무, 무임승차 경험, 평가 방식 만족도, 도구 사용 의향 4개 영역으로 나눴다. 문항은 총 12개이고 객관식 10개, 서술형 2개다.", files: [] },
-      { id: "t6", title: "슬라이드 작성 (최종)", owner: "m2", due: fromNow(3, 18, 0), submittedAt: null, ai: null },
-      { id: "t7", title: "프로토타입 기획서", owner: "m3", due: fromNow(-7, 18, 0), submittedAt: fromNow(-7, 14, 0), ai: 18, folderId: "f2",
-        text: "프로토타입은 과업 등록, 제출 기록, 기여도 보고서 3단계로 구성한다. 학생은 과업을 제출하면 되고, 교수는 근거 중심으로 팀별 기여를 확인한다.", files: [{ id: "sf3", name: "프로토타입_화면.png", size: 245000 }] },
-      { id: "t8", title: "시연 시나리오 작성", owner: "m3", due: fromNow(-4, 18, 0), submittedAt: fromNow(-4, 11, 30), ai: 45,
-        text: "시연은 팀 만들기, 과업 제출과 AI 점검, 기여도 확인 순서로 진행한다. 짧은 직접 작성 글과 긴 붙여넣기 글의 결과 차이를 보여주는 것이 핵심이다.", files: [] },
-      { id: "t9", title: "가격 설정 근거 정리", owner: "m3", due: fromNow(-2, 12, 0), submittedAt: fromNow(-2, 13, 50), ai: 25,
-        text: "학생은 무료, 교수는 무료 시범 후 학교·학과 단위 구독으로 간다. 대학 재정이 빠듯해 처음부터 유료 도입은 어렵다는 점을 근거로 삼았다.", files: [] },
-      { id: "t10", title: "발표 연습", owner: "m3", due: inHours(20), submittedAt: null, ai: null },
+      { id: "t1", title: "거시환경 분석 마무리 (PESTEL 6개 영역)", owner: "m1", due: D(10, 6, 18, 0), submittedAt: D(10, 6, 14, 20), ai: 12, folderId: "f1",
+        text: "지난 회의에서 정리한 6개 환경 영역(정치·경제·사회·기술·환경·법률)을 다시 검토했다. FairWork에 가장 크게 영향을 주는 요인은 학생의 낮은 지불능력, 개인정보 관련 규제, 경쟁 서비스의 쉬운 진입이다. 그래서 학생에게 비용을 받지 않는 구조와 기능 차별화가 필요하다는 결론을 냈다.", files: [] },
+      { id: "t2", title: "미시환경 분석 (경쟁 서비스·이해관계자)", owner: "m1", due: D(10, 8, 18, 0), submittedAt: D(10, 8, 10, 50), ai: 22, folderId: "f1",
+        text: "경쟁 서비스는 노션·구글독스 같은 일반 협업툴과 CATME·Buddycheck 같은 팀 평가 도구로 나눠 봤다. 일반 협업툴은 같이 쓰기는 편하지만 개인별 기여 기록이 남지 않고, 평가 도구는 프로젝트가 끝난 뒤에야 동료평가가 이뤄진다. 이해관계자는 학생, 교수자, 학교·학과로 정리했다.", files: [] },
+      { id: "t3", title: "소비자 조사 준비 (조사 대상·설문 구성)", owner: "m1", due: D(10, 11, 18, 0), submittedAt: D(10, 11, 9, 30), ai: 18,
+        text: "조사 대상은 FairWork를 실제로 쓰게 될 대학생과 교수자로 정했다. 학생은 팀 프로젝트 경험이 많은 경영·공학 계열 중심이다. 설문은 온라인으로 진행하고, 팀 프로젝트에서 겪은 불편, 무임승차 경험, 현재 평가 방식 만족도, 지불의사와 비용 부담 주체, 선호하는 서비스 형태를 묻는다. 문항을 완성한 뒤 진행하며 결과는 제품 구성과 가격 결정에 반영한다.", files: [] },
+      { id: "t4", title: "시장세분화·표적시장 선정", owner: "m1", due: D(10, 13, 18, 0), submittedAt: D(10, 13, 12, 40), ai: 41, folderId: "f2",
+        text: "시장은 사용자와 비용 부담 주체에 따라 학생, 교수자, 학교·학과로 나누고, 전공별 팀 프로젝트 비중도 함께 고려했다. 표적시장은 팀 프로젝트 비중이 높은 경영·공학 계열 대학생과 교수자이며, 실제 비용은 학교나 학과에서 부담하는 것으로 설정했다.", files: [] },
+
+      { id: "t5", title: "내부환경 분석 (SWOT)", owner: "m2", due: D(10, 8, 18, 0), submittedAt: D(10, 8, 16, 40), ai: 24, folderId: "f1",
+        text: "강점은 개인별 기여를 기록해 교수자가 근거로 확인할 수 있다는 점이고, 약점은 출시 전이라 인지도와 사용 사례가 없다는 점이다. 기회는 AI 사용이 일상화되며 '누가 실제로 했나'를 가리는 수요가 커진 것이고, 위협은 대학 재정 부담과 일반 협업툴의 기능 확장이다.", files: [] },
+      { id: "t6", title: "제품 관리 (핵심·유형·확장 제품)", owner: "m2", due: D(10, 11, 18, 0), submittedAt: D(10, 11, 21, 40), ai: 38, folderId: "f2",
+        text: "FairWork는 형태가 없는 웹·앱 기반 구독 서비스다. 핵심제품은 팀 프로젝트에서의 공정한 평가, 유형제품은 개인별 기여 기록과 마감 관리 기능, 확장제품은 LMS 연동과 교내 시범운영 지원으로 정리했다. 그중 개인별 기여를 기록하고 교수자가 확인하는 기능에 가장 중점을 두기로 했다.", files: [] },
+      { id: "t7", title: "가격 관리 (가격 구조·가격 전략)", owner: "m2", due: D(10, 13, 18, 0), submittedAt: D(10, 13, 17, 30), ai: 78, folderId: "f2",
+        text: "학생들의 가격 부담을 고려해 학생은 무료로 사용하고 학교·학과 단위로 구독료를 받는 가격 구조를 정했다. 처음에는 교내에서 무료 시범운영으로 사용 성과를 확보하고, 이를 바탕으로 학과·학교 단위 유료 구독으로 전환하는 전략이다. 구체적인 금액은 설문에서 지불의사와 적정 가격대를 확인한 뒤 결정한다.", files: [] },
+      { id: "t8", title: "신제품 개발과 수명관리", owner: "m2", due: D(10, 14, 18, 0), submittedAt: D(10, 14, 18, 40), ai: 26, folderId: "f2",
+        text: "FairWork는 아직 출시 전이라 제품수명주기상 도입기로 봤다. 도입기에는 인지도가 낮으므로 시범운영으로 실제 사용 사례를 쌓는 데 집중한다. 서비스가 자리 잡은 뒤에는 LMS 연동, 프로젝트 내 채팅과 캘린더, AI 작성 비율 확인 기능을 차례로 추가해 확장한다.", files: [] },
+
+      { id: "t9", title: "제품 소개 및 시연 시나리오", owner: "m3", due: D(10, 9, 12, 0), submittedAt: D(10, 9, 14, 30), ai: 29,
+        text: "시연은 과업 만들기, 활동 기록, 기여도 보고서의 세 단계로 구성한다. 학생이 과업을 제출하면 정시 여부와 AI 점검 결과가 기록되고, 교수자는 그 근거를 확인한다. 직접 작성한 글과 AI로 붙여넣은 글의 결과가 어떻게 다른지를 보여주는 것이 핵심이다.", files: [] },
+      { id: "t10", title: "포지셔닝 정리", owner: "m3", due: D(10, 12, 12, 0), submittedAt: D(10, 13, 10, 0), ai: 83,
+        text: "노션이나 구글독스 같은 일반 협업툴과 차별화하기 위해 FairWork를 팀원 개개인의 기여를 기록하고 이를 평가에 활용할 수 있는 서비스로 포지셔닝한다. 경쟁 서비스가 협업의 편의에 초점을 맞춘다면, FairWork는 공정한 평가 근거를 남기는 데 초점을 둔다.", files: [] },
+      { id: "t11", title: "최종 발표자료 구성", owner: "m3", due: D(10, 14, 12, 0), submittedAt: D(10, 15, 18, 30), ai: 52,
+        text: "최종 발표자료는 수업에서 진행한 순서에 맞춰 주제 선정, 거시환경 분석, 소비자 조사, 제품 관리, 시장세분화와 포지셔닝, 가격 관리, 신제품 개발과 수명관리 순으로 구성한다. 각자 맡은 부분을 작성해 발표자료를 완성한다.", files: [] },
+      { id: "t12", title: "발표 대본 정리 및 팀원 역할 배분", owner: "m3", due: D(10, 17, 12, 30), submittedAt: null, ai: null },
     ],
     chat: [
-      { id: "c1", sender: "m3", text: "이번 주 안에 각자 맡은 자료 정리까지 끝내요. 마감 꼭 지켜주세요!", ts: t0.getTime() },
-      { id: "c2", sender: "m1", text: "넵 경쟁사례 조사 올렸습니다", ts: t1.getTime() },
-      { id: "c3", sender: "sys", text: "과업 등록: 발표 연습 · 담당 송대희 · 마감 " + fmt(inHours(20)), ts: t1.getTime() + 60000 },
+      { id: "c1", sender: "m3", text: "10일 회의 내용 기준으로 각자 맡은 부분 정리해서 올려요. 마감 꼭 지켜주세요!", ts: new Date(D(10, 10, 21, 0)).getTime() },
+      { id: "c2", sender: "sys", text: "과업 등록: 발표 대본 정리 및 팀원 역할 배분 · 담당 송대희 · 마감 " + fmt(D(10, 17, 12, 30)), ts: new Date(D(10, 15, 19, 0)).getTime() },
+      { id: "c3", sender: "sys", text: "프로젝트가 종료되었습니다. 이제 익명 동료평가를 제출할 수 있어요.", ts: new Date(D(10, 15, 20, 0)).getTime() },
     ],
-    peerEvals: [],
+    peerEvals: [
+      { from: "m2", to: "m3", scores: { contribution: 4, timeliness: 4, collab: 4, quality: 4 }, comment: "" },
+      { from: "m2", to: "m1", scores: { contribution: 5, timeliness: 5, collab: 5, quality: 5 }, comment: "" },
+      { from: "m1", to: "m3", scores: { contribution: 3, timeliness: 3, collab: 3, quality: 3 }, comment: "" },
+      { from: "m1", to: "m2", scores: { contribution: 5, timeliness: 5, collab: 5, quality: 5 }, comment: "" },
+    ],
   },
 ];
 
@@ -298,6 +320,9 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+          {role === "prof" && (
+            <span className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5" style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", fontSize: 12, fontWeight: 700, color: "#DCE2FF" }}><GraduationCap size={13} /> {PROF_NAME} 교수님</span>
+          )}
           {role === "student" && (
             <label className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5" style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", fontSize: 12, color: "#B8BEDA" }}>
               <User size={13} /> 학생 계정
@@ -430,7 +455,7 @@ function AssignmentDetail({ a, teams, subjectName, onBack, onEdit, onDelete }) {
 }
 
 function ProfArea({ screen, setScreen, subjects, addSubject, rmSubject, renameSubject, saveRoster, assignments, addAssignment, updateAssignment, deleteAssignment, projects, active, setActive, notify }) {
-  const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "과목 미지정";
+  const subjectName = (id) => { const n = subjects.find((s) => s.id === id)?.name; return n ? `${n} · ${PROF_NAME} 교수님` : "과목 미지정"; };
   if (screen === "subjects") {
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -627,7 +652,7 @@ function StudentArea({ me, switchStudent, createFor, setCreateFor, screen, setSc
   const mySubjectIds = subjects.filter((sb) => sb.roster.some((r) => r.sid === me.sid)).map((sb) => sb.id);
   const myAssignments = assignments.filter((a) => mySubjectIds.includes(a.subjectId));
   const isMine = (p) => p.members.some((m) => m.sid === me.sid);
-  const subjectName = (id) => subjects.find((x) => x.id === id)?.name || "";
+  const subjectName = (id) => { const n = subjects.find((x) => x.id === id)?.name; return n ? `${n} · ${PROF_NAME} 교수님` : ""; };
   if (screen === "create" && createFor) return <CreateProjectWizard me={me} assignments={myAssignments.filter((a) => !projects.some((p) => p.assignmentId === a.id && isMine(p)))} initialAssignmentId={createFor} subjects={subjects} projects={projects} onCancel={() => setScreen("home")} onDone={(p) => { const a = assignments.find((x) => x.id === p.assignmentId); const np = addProject({ ...p, finalDue: a?.finalDue, assignmentTitle: a?.title }); setActive(np.id); setScreen("work"); }} />;
   if (screen === "work" && active) { const p = projects.find((x) => x.id === active); if (p && isMine(p)) return <ProjectWorkspace p={p} meSid={me.sid} onSwitch={(sid) => switchStudent(sid, true)} patch={(fn) => patchProject(p.id, fn)} onBack={() => setScreen("home")} />; }
   return (
@@ -810,7 +835,7 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
           <div className="flex items-center gap-2"><div className="flex items-center">{p.members.slice(0, 5).map((m, i) => <div key={m.id} className="flex items-center justify-center rounded-full" style={{ width: 30, height: 30, marginLeft: i ? -8 : 0, background: m.color, color: "#fff", fontWeight: 700, fontSize: 12, border: "2px solid #2A3A9A" }}>{m.name[0]}</div>)}</div><span style={{ fontSize: 12, opacity: 0.75 }}>{p.members.length}명</span></div>
         </div>
       </div>
-      {!p.ended && <ReminderBar tasks={p.tasks} me={me} onSubmit={(t) => setSubmitFor(t)} />}
+      <ReminderBar tasks={p.tasks} me={me} onSubmit={(t) => setSubmitFor(t)} />
       <div className="flex gap-1 mt-3 overflow-x-auto rounded-2xl p-1.5" style={{ scrollbarWidth: "none", background: "#fff", border: `1px solid ${C.line}`, boxShadow: SH.card }}>{TABS.map(([k, label, Icon]) => <div key={k} className="flex-shrink-0"><Tab active={tab === k} onClick={() => setTab(k)} icon={<Icon size={16} />}>{label}</Tab></div>)}</div>
       <div className="mt-4">
         {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
@@ -1175,12 +1200,13 @@ function ScoreRules() {
             ))}
           </div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>② AI 인정 계수 (AI 점검 % 기준)</div>
-            {[["30% 미만", "독자적 작성 추정", "100%", C.green], ["30% ~ 60%", "일부 의심", "70%", C.amber], ["60% 초과", "AI 복붙 의심 · 교수님 확인 대상", "30%", C.red]].map(([a, b, c, col]) => (
+            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>② AI 인정 계수 (AI 점검 % 기준, 3구간)</div>
+            {[["0 ~ 29%", "사용하지 않았을 가능성 높음", "100%", C.green], ["30 ~ 69%", "일부 사용 가능성 · 참고 표시만", "85%", C.amber], ["70 ~ 100%", "사용 의심 · 교수님 확인 대상", "30%", C.red]].map(([a, b, c, col]) => (
               <div key={a} className="flex items-center gap-2 py-1" style={{ fontSize: 13, borderBottom: `1px dashed ${C.line}` }}>
                 <span style={{ flex: 1, fontWeight: 600 }}>{a}</span><span style={{ flex: 1.4, color: C.muted }}>{b}</span><span style={{ fontWeight: 800, width: 48, textAlign: "right", color: col }}>{c}</span>
               </div>
             ))}
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>억울한 감점을 막기 위해 <b style={{ color: C.ink }}>확실한 구간(70% 이상)에서만 크게</b> 반영하고, 애매한 구간은 소폭 반영합니다. AI 탐지 도구 전체에 통용되는 공식 기준표는 없고, 도구마다 % 의미도 다릅니다(Turnitin·Copyleaks는 AI로 보이는 글의 비율, GPTZero·Originality.ai는 AI일 확신도). 그래서 참고한 공개 자료의 숫자로 구간을 잡았습니다: Turnitin은 20% 미만 결과를 신뢰도가 낮고 오탐 가능성이 높다고 안내하고, GPTZero는 AI 판정 기준 예시로 65%·80%를 듭니다. 30·70 경계는 이를 바탕으로 한 시제품 정책값입니다.</div>
           </div>
           <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 800, marginBottom: 2 }}>③ 계산 방법</div>
@@ -1358,6 +1384,7 @@ function SubmitModal({ task, onClose, onSubmit }) {
   const nowTier = nowLate ? LATE_TIERS.slice(1, 5).find((x) => nowDue <= x.max) : null;
   const go = async () => { if (!text.trim() || busy) return; setBusy(true); const r = await onSubmit(task.id, text, files); const lm = task.due ? new Date(r.submittedAt).getTime() - new Date(task.due).getTime() : 0; setResult({ ...r, late: lm > 0 ? lm : 0, tier: lm > 0 ? LATE_TIERS.slice(1, 5).find((x) => lm <= x.max) : null }); setBusy(false); };
   const flagged = done && isFlagged(result.ai);
+  const mid = done && !flagged && result.ai >= AI_LOW;
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4" style={{ background: "rgba(20,22,43,0.5)", backdropFilter: "blur(3px)", zIndex: 50 }} onClick={onClose}>
       <div className="fw-fade rounded-2xl w-full" style={{ maxWidth: 520, background: "#fff", boxShadow: SH.pop }} onClick={(e) => e.stopPropagation()}>
@@ -1383,13 +1410,13 @@ function SubmitModal({ task, onClose, onSubmit }) {
               <div className="flex gap-2 mt-3"><button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : "제출하고 검사"}</button><button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
             </>
           ) : (
-            <div className="rounded-xl px-4 py-4 text-center" style={{ background: flagged ? C.redSoft : C.greenSoft }}>
+            <div className="rounded-xl px-4 py-4 text-center" style={{ background: flagged ? C.redSoft : mid ? C.amberSoft : C.greenSoft }}>
               <div style={{ fontSize: 13, color: C.muted }}>AI 작성 추정치</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: flagged ? C.red : C.green }}>{result.ai}%</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: flagged ? C.red : mid ? C.amber : C.green }}>{result.ai}%</div>
               <div className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 mt-1" style={{ fontSize: 11, fontWeight: 700, background: "#fff", color: result.source === "copyleaks" ? C.primary : C.muted }}>{AI_SRC[result.source]}</div>
               {result.note && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{result.note}</div>}
               <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>{result.late > 0 ? <>지연 제출 · <b>{fmtLate(result.late)}</b> 지각 → 정시 점수 <b>{result.tier.pts}점</b></> : <>정시 제출 → 정시 점수 <b>100점</b></>}{files.length > 0 && <> · 참고 파일 {files.length}개 첨부</>}</div>
-              <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "높음 → 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : "양호 → 본인 정리로 인정됩니다. 제출 완료!"}</div>
+              <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "사용 의심(70% 이상) → 점수에 크게 반영되고 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : mid ? "일부 사용 가능성(30~69%) → 점수에 소폭만 반영되며 교수님 확인 대상은 아닙니다. 제출 완료!" : "사용하지 않았을 가능성 높음(30% 미만) → 감점 없이 본인 정리로 인정됩니다. 제출 완료!"}</div>
               <button onClick={onClose} className="rounded-md px-4 py-2 mt-3" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button>
             </div>
           )}
