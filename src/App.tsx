@@ -226,9 +226,9 @@ const seedProjects = [
   {
     id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: D(10, 17, 23, 59), assignmentTitle: "마케팅 기획 프로젝트", ended: true, sample: true,
     members: [
-      { id: "m1", sid: "2026230002", name: "김종성", role: "자료조사", leader: false, color: AVATARS[0] },
-      { id: "m2", sid: "2026230010", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
-      { id: "m3", sid: "2026230006", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
+      { id: "m1", sid: "2026230002", name: "김종성", role: "자료조사, 발표, 자료 검토 및, 내용 피드백", leader: false, color: AVATARS[0] },
+      { id: "m2", sid: "2026230010", name: "이유진", role: "자료조사, 자료취합, 문서작성, 발표, 프로그램 디자인, 발표대본 작성", leader: false, color: AVATARS[1] },
+      { id: "m3", sid: "2026230006", name: "송대희", role: "팀장, 발표, 역할 배분, 자료 분류 및 정리, 프로그램 제작 및 시연", leader: true, color: AVATARS[2] },
     ],
     folders: [{ id: "f1", name: "환경 분석" }, { id: "f2", name: "STP·4P 전략" }],
     tasks: [
@@ -1359,9 +1359,9 @@ function RolePicker({ value, onChange }) {
   const tokens = (value || "").split(",").map((x) => x.trim()).filter(Boolean);
   const presetSel = tokens.filter((t) => ROLE_PRESETS.includes(t));
   // 입력 중인 글자는 따로 보관합니다(띄어쓰기가 사라지지 않도록, 저장할 때만 공백을 정리)
-  const [etcText, setEtcText] = useState(tokens.find((t) => !ROLE_PRESETS.includes(t)) || "");
+  const [etcText, setEtcText] = useState(tokens.filter((t) => !ROLE_PRESETS.includes(t)).join(", "));
   const [showEtc, setShowEtc] = useState(!!etcText);
-  const emit = (presets, text) => { const clean = text.replace(/,/g, " ").replace(/\s+/g, " ").trim(); onChange([...presets, ...(clean ? [clean] : [])].join(", ")); };
+  const emit = (presets, text) => { const clean = text.replace(/\s+/g, " ").replace(/^[,\s]+|[,\s]+$/g, ""); onChange([...presets, ...(clean ? [clean] : [])].join(", ")); };
   const togglePreset = (p) => { const next = presetSel.includes(p) ? presetSel.filter((x) => x !== p) : [...presetSel, p]; emit(next, etcText); };
   const etcOn = showEtc || etcText.trim() !== "";
   return (
