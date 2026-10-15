@@ -136,16 +136,23 @@ const PEER_DIMS = [
 
 /* ---------- seed ---------- */
 // 학교 재학생 명부(가정) — 교수는 여기서 체크해서 과목 수강생을 등록합니다. 직접 타이핑하지 않습니다.
+// 학번 20262300nn = 이름(가나다) 순번
 const SEED_STUDENTS = [
-  { sid: "2026230006", name: "대희" }, { sid: "2026230012", name: "종성" },
-  { sid: "2026230021", name: "유진" }, { sid: "2026230034", name: "서연" },
-  { sid: "2026230047", name: "하준" }, { sid: "2026230055", name: "유나" },
-  { sid: "2026230063", name: "도윤" }, { sid: "2026230078", name: "예린" },
-  { sid: "2026230081", name: "준서" }, { sid: "2026230093", name: "채원" },
-  { sid: "2026230104", name: "시우" }, { sid: "2026230118", name: "다인" },
+  { sid: "2026230001", name: "김종민" },
+  { sid: "2026230002", name: "김종선" },
+  { sid: "2026230003", name: "나다움" },
+  { sid: "2026230004", name: "도광현" },
+  { sid: "2026230005", name: "박인희" },
+  { sid: "2026230006", name: "송대희" },
+  { sid: "2026230007", name: "유다빈" },
+  { sid: "2026230008", name: "윤석준" },
+  { sid: "2026230009", name: "이우형" },
+  { sid: "2026230010", name: "이유진" },
+  { sid: "2026230011", name: "이주원" },
+  { sid: "2026230012", name: "차준혁" },
 ];
 const seedSubjects = [
-  { id: "sub1", name: "마케팅관리", roster: SEED_STUDENTS.slice(0, 8) },
+  { id: "sub1", name: "마케팅관리", roster: SEED_STUDENTS.slice() },
 ];
 const seedAssignments = [
   { id: "a1", subjectId: "sub1", title: "마케팅 관리 과제", desc: "팀 프로젝트 주제를 정해 외부·내부 환경 분석, 제품 시연, 가격 설정까지 정리해 발표합니다.", finalDue: fromNow(5, 23, 59) },
@@ -158,9 +165,9 @@ const seedProjects = [
   {
     id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: fromNow(5, 23, 59), assignmentTitle: "마케팅 관리 과제", ended: false, sample: true,
     members: [
-      { id: "m1", name: "종성", role: "자료조사", leader: false, color: AVATARS[0] },
-      { id: "m2", name: "유진", role: "문서작성", leader: false, color: AVATARS[1] },
-      { id: "m3", name: "대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
+      { id: "m1", name: "김종선", role: "자료조사", leader: false, color: AVATARS[0] },
+      { id: "m2", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
+      { id: "m3", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
     ],
     tasks: [
       { id: "t1", title: "주제 선정 & 시장 리서치", owner: "m1", due: fromNow(-8, 18, 0), submittedAt: fromNow(-9, 21, 30), ai: 15 },
@@ -177,7 +184,7 @@ const seedProjects = [
     chat: [
       { id: "c1", sender: "m3", text: "이번 주 안에 각자 맡은 자료 정리까지 끝내요. 마감 꼭 지켜주세요!", ts: t0.getTime() },
       { id: "c2", sender: "m1", text: "넵 경쟁사례 조사 올렸습니다", ts: t1.getTime() },
-      { id: "c3", sender: "sys", text: "과업 등록: 발표 연습 · 담당 대희 · 마감 " + fmt(inHours(20)), ts: t1.getTime() + 60000 },
+      { id: "c3", sender: "sys", text: "과업 등록: 발표 연습 · 담당 송대희 · 마감 " + fmt(inHours(20)), ts: t1.getTime() + 60000 },
     ],
     peerEvals: [],
   },
@@ -404,7 +411,7 @@ function ProfTeamCard({ p }) {
         <ResponsiveContainer>
           <BarChart data={data} layout="vertical" margin={{ left: 6, right: 42, top: 0, bottom: 0 }}>
             <XAxis type="number" domain={[0, 100]} hide />
-            <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={44} tick={{ fontSize: 13, fill: C.ink, fontWeight: 600 }} />
+            <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={56} tick={{ fontSize: 13, fill: C.ink, fontWeight: 600 }} />
             <Bar dataKey="v" radius={[0, 6, 6, 0]} barSize={20}>{data.map((d, i) => <Cell key={i} fill={d.color} />)}<LabelList dataKey="v" position="right" formatter={(v) => `${v}점`} style={{ fontSize: 12, fill: C.muted, fontWeight: 600 }} /></Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -875,7 +882,7 @@ function ScoreTab({ members, tasks, meId }) {
         <div style={{ width: "100%", height: 210 }}>
           <ResponsiveContainer>
             <BarChart data={data} layout="vertical" margin={{ left: 6, right: 44, top: 0, bottom: 0 }}>
-              <XAxis type="number" domain={[0, 100]} hide /><YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={44} tick={{ fontSize: 13, fill: C.ink, fontWeight: 600 }} />
+              <XAxis type="number" domain={[0, 100]} hide /><YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={56} tick={{ fontSize: 13, fill: C.ink, fontWeight: 600 }} />
               <Bar dataKey="v" radius={[0, 6, 6, 0]} barSize={26}>{data.map((d, i) => <Cell key={i} fill={d.color} />)}<LabelList dataKey="v" position="right" formatter={(v) => `${v}점`} style={{ fontSize: 12, fill: C.muted, fontWeight: 600 }} /></Bar>
             </BarChart>
           </ResponsiveContainer>
