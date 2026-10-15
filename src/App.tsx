@@ -165,9 +165,9 @@ const seedProjects = [
   {
     id: "p1", assignmentId: "a1", teamName: "안왔조", finalDue: fromNow(5, 23, 59), assignmentTitle: "마케팅 관리 과제", ended: false, sample: true,
     members: [
-      { id: "m1", name: "김종성", role: "자료조사", leader: false, color: AVATARS[0] },
-      { id: "m2", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
-      { id: "m3", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
+      { id: "m1", sid: "2026230002", name: "김종성", role: "자료조사", leader: false, color: AVATARS[0] },
+      { id: "m2", sid: "2026230010", name: "이유진", role: "문서작성", leader: false, color: AVATARS[1] },
+      { id: "m3", sid: "2026230006", name: "송대희", role: "팀장 · 발표", leader: true, color: AVATARS[2] },
     ],
     tasks: [
       { id: "t1", title: "주제 선정 & 시장 리서치", owner: "m1", due: fromNow(-8, 18, 0), submittedAt: fromNow(-9, 21, 30), ai: 15 },
@@ -198,6 +198,10 @@ export default function App() {
   const [sScreen, setSScreen] = useState("home");
   const [pScreen, setPScreen] = useState("home");
   const [activeProject, setActiveProject] = useState(null);
+  const [createFor, setCreateFor] = useState(null);
+  const [studentSid, setStudentSid] = useState("2026230006"); // 시연용 로그인 학생(LMS 연동 시에는 로그인 정보로 대체)
+  const meStudent = SEED_STUDENTS.find((x) => x.sid === studentSid) || SEED_STUDENTS[0];
+  const changeStudent = (sid, stay) => { setStudentSid(sid); if (!stay) { setSScreen("home"); setActiveProject(null); } };
   const [activeAssignment, setActiveAssignment] = useState(null);
 
   const addSubject = (name) => setSubjects((x) => [...x, { id: "sub" + Date.now(), name, roster: [] }]);
@@ -209,7 +213,11 @@ export default function App() {
   }));
   const setRosterAll = (subjectId, on) => setSubjects((x) => x.map((s) => (s.id === subjectId ? { ...s, roster: on ? SEED_STUDENTS.slice() : [] } : s)));
   const addAssignment = (a) => setAssignments((x) => [...x, { ...a, id: "a" + Date.now() }]);
-  const addProject = (p) => { const np = { ...p, id: "p" + Date.now(), chat: [], peerEvals: [] }; setProjects((x) => [...x, np]); return np; };
+  const addProject = (p) => {
+    const leader = p.members.find((m) => m.leader);
+    const np = { ...p, id: "p" + Date.now(), ended: false, peerEvals: [], chat: [{ id: "c" + Date.now(), sender: "sys", text: `팀장 ${leader?.name}님이 프로젝트를 만들고 팀원 ${p.members.length - 1}명을 추가했어요. 팀원 모두 이 프로젝트에 들어올 수 있습니다.`, ts: Date.now() }] };
+    setProjects((x) => [...x, np]); return np;
+  };
   const patchProject = (id, fn) => setProjects((x) => x.map((p) => (p.id === id ? fn(p) : p)));
 
   return (
@@ -224,9 +232,17 @@ export default function App() {
               <div className="flex items-center gap-1" style={{ fontSize: 11, color: "#8CE0B8", marginTop: 2 }}><Link2 size={11} /> LMS 연동 · LTI 1.3</div>
             </div>
           </div>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+          {role === "student" && (
+            <label className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5" style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", fontSize: 12, color: "#B8BEDA" }}>
+              <User size={13} /> 학생 계정
+              <select value={studentSid} onChange={(e) => changeStudent(e.target.value)} className="rounded-md px-1.5 py-0.5" style={{ fontSize: 12, fontWeight: 700, background: "#fff", color: C.ink, outline: "none" }}>{SEED_STUDENTS.map((x) => <option key={x.sid} value={x.sid}>{x.name}</option>)}</select>
+            </label>
+          )}
           <div className="flex items-center gap-1 rounded-xl p-1" style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)" }}>
             <RoleBtn active={role === "prof"} onClick={() => setRole("prof")} icon={<GraduationCap size={15} />}>교수</RoleBtn>
             <RoleBtn active={role === "student"} onClick={() => setRole("student")} icon={<User size={15} />}>학생</RoleBtn>
+          </div>
           </div>
         </div>
       </div>
@@ -235,7 +251,7 @@ export default function App() {
         {role === "prof" ? (
           <ProfArea screen={pScreen} setScreen={setPScreen} subjects={subjects} addSubject={addSubject} rmSubject={rmSubject} toggleSubjectRoster={toggleSubjectRoster} setRosterAll={setRosterAll} assignments={assignments} addAssignment={addAssignment} projects={projects} active={activeAssignment} setActive={setActiveAssignment} />
         ) : (
-          <StudentArea screen={sScreen} setScreen={setSScreen} subjects={subjects} assignments={assignments} projects={projects} addProject={addProject} patchProject={patchProject} active={activeProject} setActive={setActiveProject} />
+          <StudentArea me={meStudent} switchStudent={changeStudent} createFor={createFor} setCreateFor={setCreateFor} screen={sScreen} setScreen={setSScreen} subjects={subjects} assignments={assignments} projects={projects} addProject={addProject} patchProject={patchProject} active={activeProject} setActive={setActiveProject} />
         )}
       </div>
     </div>
@@ -467,28 +483,44 @@ function CreateAssignment({ subjects, onManageSubjects, onCancel, onDone }) {
 }
 
 /* =================== STUDENT =================== */
-function StudentArea({ screen, setScreen, subjects, assignments, projects, addProject, patchProject, active, setActive }) {
-  if (screen === "create") return <CreateProjectWizard assignments={assignments} subjects={subjects} projects={projects} onCancel={() => setScreen("home")} onDone={(p) => { const a = assignments.find((x) => x.id === p.assignmentId); const np = addProject({ ...p, finalDue: a?.finalDue, assignmentTitle: a?.title }); setActive(np.id); setScreen("work"); }} />;
-  if (screen === "work" && active) { const p = projects.find((x) => x.id === active); return <ProjectWorkspace p={p} patch={(fn) => patchProject(p.id, fn)} onBack={() => setScreen("home")} />; }
+function StudentArea({ me, switchStudent, createFor, setCreateFor, screen, setScreen, subjects, assignments, projects, addProject, patchProject, active, setActive }) {
+  const mySubjectIds = subjects.filter((sb) => sb.roster.some((r) => r.sid === me.sid)).map((sb) => sb.id);
+  const myAssignments = assignments.filter((a) => mySubjectIds.includes(a.subjectId));
+  const isMine = (p) => p.members.some((m) => m.sid === me.sid);
+  const subjectName = (id) => subjects.find((x) => x.id === id)?.name || "";
+  if (screen === "create" && createFor) return <CreateProjectWizard me={me} assignments={myAssignments.filter((a) => !projects.some((p) => p.assignmentId === a.id && isMine(p)))} initialAssignmentId={createFor} subjects={subjects} projects={projects} onCancel={() => setScreen("home")} onDone={(p) => { const a = assignments.find((x) => x.id === p.assignmentId); const np = addProject({ ...p, finalDue: a?.finalDue, assignmentTitle: a?.title }); setActive(np.id); setScreen("work"); }} />;
+  if (screen === "work" && active) { const p = projects.find((x) => x.id === active); if (p && isMine(p)) return <ProjectWorkspace p={p} meSid={me.sid} onSwitch={(sid) => switchStudent(sid, true)} patch={(fn) => patchProject(p.id, fn)} onBack={() => setScreen("home")} />; }
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
-        <div><h2 style={h2}>과제 & 내 프로젝트</h2><div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>팀 프로젝트의 진행 상황과 내 기여가 한눈에 기록됩니다.</div></div>
-        <PrimaryBtn onClick={() => setScreen("create")}><FolderPlus size={16} /> 프로젝트 생성</PrimaryBtn>
+      <div className="mb-3">
+        <h2 style={h2}>{me.name}님의 과제</h2>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>학번 {me.sid} · 수강 중인 과목의 과제만 보입니다. 팀장이 프로젝트를 만들어 나를 추가하면 여기에 팀이 나타나요.</div>
       </div>
-      {assignments.map((a) => {
-        const mine = projects.filter((p) => p.assignmentId === a.id);
+      {myAssignments.length === 0 && <Empty title="아직 받은 과제가 없습니다" sub="교수님이 이 과목의 수강생으로 등록하면 과제가 여기에 표시됩니다." />}
+      {myAssignments.map((a) => {
+        const mine = projects.filter((p) => p.assignmentId === a.id && isMine(p));
         return (
           <Card key={a.id} className="mb-3">
+            <div className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 mb-2" style={{ fontSize: 11, fontWeight: 600, color: C.primary, background: "#EEF1FE" }}><GraduationCap size={11} /> {subjectName(a.subjectId)}</div>
             <div className="flex items-center gap-2"><span className="rounded-md p-1.5" style={{ background: "#EEF1FE" }}><ClipboardList size={16} color={C.primary} /></span><span style={{ fontWeight: 800, fontSize: 16 }}>{a.title}</span><span className="ml-auto inline-flex items-center gap-2" style={{ fontSize: 12, color: C.muted }}><CalendarDays size={13} /> {fmt(a.finalDue)} <DDayChip due={a.finalDue} /></span></div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 6 }}>{a.desc}</div>
             <div className="mt-3">
-              {mine.length === 0 ? <div style={{ fontSize: 13, color: C.muted }}>이 과제로 만든 프로젝트가 없습니다. '프로젝트 생성'을 눌러 팀을 꾸려보세요.</div> :
-                mine.map((p) => (
-                  <button key={p.id} onClick={() => { setActive(p.id); setScreen("work"); }} className="fw-row w-full text-left flex items-center gap-3 rounded-xl px-3.5 py-3 mt-2" style={{ border: `1px solid ${C.line}`, background: "#FAFBFE" }}>
-                    <Layers size={16} color={C.primary} /><span style={{ fontWeight: 700, fontSize: 14 }}>{p.teamName}</span><AvatarStack members={p.members} /><span className="ml-auto flex items-center gap-2" style={{ minWidth: 110 }}><span style={{ flex: 1 }}><ProgressBar pct={projPct(p)} /></span><b style={{ fontSize: 12, color: C.muted }}>{projPct(p)}%</b></span><ChevronRight size={16} color={C.muted} />
+              {mine.length === 0 ? (
+                <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap" style={{ background: "#F7F8FC", border: `1px dashed ${C.line}` }}>
+                  <div style={{ fontSize: 13, color: C.muted }}>아직 소속된 팀이 없습니다. 팀장이 나를 추가했다면 곧 여기에 나타나고, 팀이 없다면 <b style={{ color: C.ink }}>내가 팀장이 되어</b> 프로젝트를 만들 수 있어요.</div>
+                  <PrimaryBtn onClick={() => { setCreateFor(a.id); setScreen("create"); }}><FolderPlus size={16} /> 프로젝트 생성 (팀장)</PrimaryBtn>
+                </div>
+              ) : mine.map((p) => {
+                const leader = p.members.find((m) => m.leader);
+                const iAmLeader = leader?.sid === me.sid;
+                return (
+                  <button key={p.id} onClick={() => { setActive(p.id); setScreen("work"); }} className="fw-row w-full text-left flex items-center gap-3 rounded-xl px-3.5 py-3 mt-2 flex-wrap" style={{ border: `1px solid ${C.line}`, background: "#FAFBFE" }}>
+                    <Layers size={16} color={C.primary} /><span style={{ fontWeight: 700, fontSize: 14 }}>{p.teamName}</span>
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: iAmLeader ? "#8A6A12" : C.violet, background: iAmLeader ? "#FBF3DC" : C.violetSoft }}>{iAmLeader ? <><Crown size={11} /> 내가 팀장</> : `팀원 · 팀장 ${leader?.name}`}</span>
+                    <AvatarStack members={p.members} /><span className="ml-auto flex items-center gap-2" style={{ minWidth: 110 }}><span style={{ flex: 1 }}><ProgressBar pct={projPct(p)} /></span><b style={{ fontSize: 12, color: C.muted }}>{projPct(p)}%</b></span><ChevronRight size={16} color={C.muted} />
                   </button>
-                ))}
+                );
+              })}
             </div>
           </Card>
         );
@@ -497,27 +529,27 @@ function StudentArea({ screen, setScreen, subjects, assignments, projects, addPr
   );
 }
 
-function CreateProjectWizard({ assignments, subjects, projects, onCancel, onDone }) {
+function CreateProjectWizard({ me, assignments, initialAssignmentId, subjects, projects, onCancel, onDone }) {
   const [step, setStep] = useState(1);
-  const [assignmentId, setAssignmentId] = useState(assignments[0]?.id || "");
+  const [assignmentId, setAssignmentId] = useState(initialAssignmentId || assignments[0]?.id || "");
   const [teamName, setTeamName] = useState("");
-  const [members, setMembers] = useState([]);
+  // 프로젝트를 만든 사람(나)이 자동으로 팀장이 됩니다.
+  const [members, setMembers] = useState([{ id: "m" + me.sid, sid: me.sid, name: me.name, role: "", leader: true, color: AVATARS[0] }]);
   const [tasks, setTasks] = useState([]);
   const assignment = assignments.find((a) => a.id === assignmentId);
   const roster = subjects.find((s) => s.id === assignment?.subjectId)?.roster || [];
   // 이미 같은 과제의 다른 팀에 속한 학생(이름 기준) → 선택 불가
-  const taken = new Set((projects || []).filter((p) => p.assignmentId === assignmentId).flatMap((p) => p.members.map((m) => m.name)));
+  const taken = new Set((projects || []).filter((p) => p.assignmentId === assignmentId).flatMap((p) => p.members.map((m) => m.sid)));
   const toggleMember = (stu) => setMembers((ms) => {
-    const exists = ms.find((m) => m.name === stu.name);
-    if (exists) { const left = ms.filter((m) => m.name !== stu.name); if (left.length && !left.some((m) => m.leader)) left[0].leader = true; return [...left]; }
-    return [...ms, { id: "m" + stu.sid, name: stu.name, role: "", leader: ms.length === 0, color: AVATARS[ms.length % AVATARS.length] }];
+    if (stu.sid === me.sid) return ms; // 팀장(나)은 빼지 못합니다
+    if (ms.some((m) => m.sid === stu.sid)) return ms.filter((m) => m.sid !== stu.sid);
+    return [...ms, { id: "m" + stu.sid, sid: stu.sid, name: stu.name, role: "", leader: false, color: AVATARS[ms.length % AVATARS.length] }];
   });
   const setRole = (id, role) => setMembers((ms) => ms.map((m) => (m.id === id ? { ...m, role } : m)));
-  const setLeader = (id) => setMembers((ms) => ms.map((m) => ({ ...m, leader: m.id === id })));
   const addTask = () => setTasks((ts) => [...ts, { id: "t" + Date.now() + ts.length, title: "", owner: members[0]?.id || "", due: fromNow(7, 23, 59), submittedAt: null, ai: null }]);
   const setTask = (id, k, v) => setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, [k]: v } : t)));
   const rmTask = (id) => setTasks((ts) => ts.filter((t) => t.id !== id));
-  const canNext = step === 1 ? teamName.trim() && assignmentId : step === 2 ? members.length >= 1 : true;
+  const canNext = step === 1 ? teamName.trim() && assignmentId : step === 2 ? members.length >= 2 : true;
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
@@ -527,36 +559,38 @@ function CreateProjectWizard({ assignments, subjects, projects, onCancel, onDone
       <Card className="mt-3">
         {step === 1 && (
           <div>
+            <div className="rounded-lg px-3 py-2 mb-3 inline-flex items-center gap-1.5" style={{ fontSize: 12, color: "#8A6A12", background: "#FBF3DC" }}><Crown size={13} /> 프로젝트를 만드는 {me.name}님이 팀장이 됩니다.</div>
             <Field label="어떤 과제의 프로젝트인가요?"><select value={assignmentId} onChange={(e) => setAssignmentId(e.target.value)} className="w-full rounded-md px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", background: "#fff" }}>{assignments.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</select></Field>
             <Field label="팀 이름" mt><TextInput value={teamName} onChange={setTeamName} placeholder="예) 5조 — 페어웤팀" /></Field>
           </div>
         )}
         {step === 2 && (
           <div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>교수님이 등록한 수강생 명단에서 팀원을 클릭해 선택하세요.</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>교수님이 등록한 출석부에서 팀원을 클릭해 추가하세요. 추가된 팀원의 화면에도 이 프로젝트가 똑같이 나타나고, 모두 들어올 수 있습니다.</div>
             {roster.length === 0 ? (
               <div style={{ fontSize: 13, color: C.muted }}>이 과제에 등록된 수강생 명단이 없습니다. 교수님께 명단 등록을 요청해주세요.</div>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {roster.map((stu) => {
-                  const picked = members.some((m) => m.name === stu.name);
-                  const busy = taken.has(stu.name) && !picked;
+                  const picked = members.some((m) => m.sid === stu.sid);
+                  const isMe = stu.sid === me.sid;
+                  const busy = taken.has(stu.sid) && !picked;
                   return (
-                    <button key={stu.sid} disabled={busy} onClick={() => toggleMember(stu)} className="inline-flex items-center gap-1 rounded-full px-3 py-1.5"
-                      style={{ fontSize: 13, fontWeight: 600, border: `1px solid ${picked ? C.primary : C.line}`, background: picked ? C.primary : busy ? "#F2F3F6" : "#fff", color: picked ? "#fff" : busy ? "#B7BCC9" : C.ink, cursor: busy ? "not-allowed" : "pointer" }}>
-                      {picked && <CheckCircle2 size={13} />}{stu.name}{busy && " · 참여중"}
+                    <button key={stu.sid} disabled={busy || isMe} onClick={() => toggleMember(stu)} className="inline-flex items-center gap-1 rounded-full px-3 py-1.5"
+                      style={{ fontSize: 13, fontWeight: 600, border: `1px solid ${picked ? C.primary : C.line}`, background: picked ? C.primary : busy ? "#F2F3F6" : "#fff", color: picked ? "#fff" : busy ? "#B7BCC9" : C.ink, cursor: busy || isMe ? "not-allowed" : "pointer" }}>
+                      {picked && <CheckCircle2 size={13} />}{stu.name}{isMe && " · 나(팀장)"}{busy && " · 참여중"}
                     </button>
                   );
                 })}
               </div>
             )}
-            {members.length === 0 && <div style={{ fontSize: 13, color: C.muted, marginTop: 10 }}>먼저 선택한 사람이 조장이 됩니다(변경 가능).</div>}
+            {members.length < 2 && <div style={{ fontSize: 13, color: C.muted, marginTop: 10 }}>팀원을 1명 이상 추가해 주세요. (팀장인 나는 자동으로 포함돼요)</div>}
             <div className="mt-4 grid gap-2">
               {members.map((m) => (
                 <div key={m.id} className="rounded-lg px-3 py-2.5" style={{ border: `1px solid ${C.line}` }}>
                   <div className="flex items-center gap-2 mb-2">
                     <Avatar m={m} sm /><span className="truncate" style={{ fontWeight: 600, maxWidth: 70, flexShrink: 0 }}>{m.name}</span>
-                    <button onClick={() => setLeader(m.id)} className="rounded-md px-2 py-1 inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 600, color: m.leader ? "#fff" : C.gold, background: m.leader ? C.gold : "#FBF3DC" }}><Crown size={12} /> 조장</button>
+                    {m.leader && <span className="rounded-md px-2 py-1 inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: C.gold }}><Crown size={12} /> 팀장</span>}
                     <span style={{ fontSize: 11, color: C.muted, marginLeft: "auto" }}>역할(복수 선택 가능)</span>
                   </div>
                   <RolePicker value={m.role} onChange={(v) => setRole(m.id, v)} />
@@ -592,11 +626,11 @@ function CreateProjectWizard({ assignments, subjects, projects, onCancel, onDone
 }
 
 /* =================== WORKSPACE =================== */
-function ProjectWorkspace({ p, patch, onBack }) {
+function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const [tab, setTab] = useState("chat");
-  const [meId, setMeId] = useState((p.members.find((m) => m.leader) || p.members[0])?.id);
   const [submitFor, setSubmitFor] = useState(null);
-  const me = p.members.find((m) => m.id === meId);
+  const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
+  const meId = me?.id;
 
   const submit = (tid, text) => { const ai = mockAiScore(text); patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, submittedAt: nowLocal(), ai } : t)) })); setSubmitFor(null); return ai; };
   const addTask = (title, owner, due) => patch((pr) => ({ ...pr, tasks: [...pr.tasks, { id: "t" + Date.now(), title, owner, due, submittedAt: null, ai: null }], chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: `과업 등록: ${title} · 담당 ${pr.members.find((m) => m.id === owner)?.name} · 마감 ${fmt(due)}`, ts: Date.now() }] }));
@@ -612,8 +646,8 @@ function ProjectWorkspace({ p, patch, onBack }) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <Back onClick={onBack}>내 프로젝트</Back>
         <div className="flex items-center gap-1 rounded-lg p-1" style={{ background: "#fff", border: `1px solid ${C.line}` }}>
-          <span style={{ fontSize: 12, color: C.muted, padding: "0 6px" }}>시연 계정</span>
-          {p.members.map((m) => <button key={m.id} onClick={() => setMeId(m.id)} className="rounded-md px-2 py-1" style={{ fontSize: 12, fontWeight: 600, color: meId === m.id ? "#fff" : C.muted, background: meId === m.id ? C.primary : "transparent" }}>{m.name}</button>)}
+          <span style={{ fontSize: 12, color: C.muted, padding: "0 6px" }}>팀원 계정 전환(시연)</span>
+          {p.members.map((m) => <button key={m.id} onClick={() => onSwitch(m.sid)} className="rounded-md px-2 py-1" style={{ fontSize: 12, fontWeight: 600, color: meId === m.id ? "#fff" : C.muted, background: meId === m.id ? C.primary : "transparent" }}>{m.name}</button>)}
         </div>
       </div>
       <div className="rounded-2xl p-5 mt-2" style={{ background: GRAD.hero, color: "#fff", boxShadow: SH.pop }}>
@@ -991,12 +1025,14 @@ function TeamTab({ members, tasks, me, setRole }) {
 }
 /* ---------- 역할 프리셋 클릭 선택 ---------- */
 function RolePicker({ value, onChange }) {
-  const tokens = (value || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const tokens = (value || "").split(",").map((x) => x.trim()).filter(Boolean);
   const presetSel = tokens.filter((t) => ROLE_PRESETS.includes(t));
-  const etc = tokens.find((t) => !ROLE_PRESETS.includes(t)) || "";
-  const [showEtc, setShowEtc] = useState(!!etc);
-  const rebuild = (presets, etcText) => onChange([...presets, ...(etcText.trim() ? [etcText.trim()] : [])].join(", "));
-  const togglePreset = (p) => { const next = presetSel.includes(p) ? presetSel.filter((x) => x !== p) : [...presetSel, p]; rebuild(next, etc); };
+  // 입력 중인 글자는 따로 보관합니다(띄어쓰기가 사라지지 않도록, 저장할 때만 공백을 정리)
+  const [etcText, setEtcText] = useState(tokens.find((t) => !ROLE_PRESETS.includes(t)) || "");
+  const [showEtc, setShowEtc] = useState(!!etcText);
+  const emit = (presets, text) => { const clean = text.replace(/,/g, " ").replace(/\s+/g, " ").trim(); onChange([...presets, ...(clean ? [clean] : [])].join(", ")); };
+  const togglePreset = (p) => { const next = presetSel.includes(p) ? presetSel.filter((x) => x !== p) : [...presetSel, p]; emit(next, etcText); };
+  const etcOn = showEtc || etcText.trim() !== "";
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
@@ -1004,9 +1040,9 @@ function RolePicker({ value, onChange }) {
           const on = presetSel.includes(p);
           return <button key={p} onClick={() => togglePreset(p)} className="rounded-full px-2.5 py-1" style={{ fontSize: 12, fontWeight: 600, border: `1px solid ${on ? C.primary : C.line}`, background: on ? C.primary : "#fff", color: on ? "#fff" : C.ink }}>{p}</button>;
         })}
-        <button onClick={() => setShowEtc((v) => !v)} className="rounded-full px-2.5 py-1" style={{ fontSize: 12, fontWeight: 600, border: `1px solid ${showEtc || etc ? C.violet : C.line}`, background: showEtc || etc ? C.violet : "#fff", color: showEtc || etc ? "#fff" : C.ink }}>기타</button>
+        <button onClick={() => setShowEtc((v) => !v)} className="rounded-full px-2.5 py-1" style={{ fontSize: 12, fontWeight: 600, border: `1px solid ${etcOn ? C.violet : C.line}`, background: etcOn ? C.violet : "#fff", color: etcOn ? "#fff" : C.ink }}>기타</button>
       </div>
-      {(showEtc || etc) && <input value={etc} onChange={(e) => rebuild(presetSel, e.target.value)} placeholder="기타 역할 직접 입력" className="rounded-md px-2 py-1.5 mt-2 w-full" style={{ fontSize: 13, border: `1px solid ${C.line}`, outline: "none" }} />}
+      {etcOn && <input value={etcText} onChange={(e) => { setEtcText(e.target.value); emit(presetSel, e.target.value); }} placeholder="기타 역할 직접 입력 (띄어쓰기 가능)" className="rounded-md px-2 py-1.5 mt-2 w-full" style={{ fontSize: 13, border: `1px solid ${C.line}`, outline: "none" }} />}
     </div>
   );
 }
