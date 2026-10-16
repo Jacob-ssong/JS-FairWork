@@ -796,6 +796,7 @@ function CreateProjectWizard({ me, assignments, initialAssignmentId, subjects, p
 function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const [tab, setTab] = useState("chat");
   const [submitFor, setSubmitFor] = useState(null);
+  const [pre, setPre] = useState({ text: "", taskId: "", result: null, busy: false });   // AI 사전점검 탭 상태(탭을 옮겨도 유지)
   const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
   const meId = me?.id;
 
@@ -817,7 +818,7 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const endProject = () => patch((pr) => ({ ...pr, ended: true, chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: "프로젝트가 종료되었습니다. 이제 익명 동료평가를 제출할 수 있어요.", ts: Date.now() }] }));
   const setMemberRole = (id, role) => patch((pr) => ({ ...pr, members: pr.members.map((m) => (m.id === id ? { ...m, role } : m)) }));
 
-  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
+  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["mine", "내 제출", ClipboardCheck], ["precheck", "AI 사전점검", Search], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
 
   return (
     <div>
@@ -850,12 +851,14 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
         {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
         {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && (!t.submittedAt || canEditTask(t)) && setSubmitFor(t)} meId={meId} />}
         {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} />}
+        {tab === "mine" && <MySubmissions tasks={p.tasks} meId={meId} onSubmit={(t) => setSubmitFor(t)} onPrecheck={() => setTab("precheck")} />}
+        {tab === "precheck" && <PrecheckTab tasks={p.tasks} meId={meId} st={pre} setSt={setPre} onSubmit={(t, text) => setSubmitFor({ ...t, text })} />}
         {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} meId={meId} onEdit={(t) => setSubmitFor(t)} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
         {tab === "score" && <ScoreTab members={p.members} tasks={p.tasks} meId={meId} />}
         {tab === "peer" && <PeerTab key={meId} members={p.members} peerEvals={p.peerEvals} meId={meId} ended={!!p.ended} isLeader={!!me?.leader} onEnd={endProject} onSubmit={submitPeer} />}
         {tab === "team" && <TeamTab members={p.members} tasks={p.tasks} me={me} setRole={setMemberRole} />}
       </div>
-      {submitFor && <SubmitModal task={submitFor} onClose={() => setSubmitFor(null)} onSubmit={submit} />}
+      {submitFor && <SubmitModal task={submitFor} onClose={() => setSubmitFor(null)} onSubmit={submit} onViewMine={() => { setSubmitFor(null); setTab("mine"); }} />}
     </div>
   );
 }
@@ -1039,7 +1042,7 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
   const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
   const [title, setTitle] = useState(""); const [owner, setOwner] = useState(me?.id); const [due, setDue] = useState(fromNow(7, 23, 59));
   const merged = [...tasks]; if (finalDue) merged.push({ id: "__final", title: "프로젝트 최종 마감", due: finalDue, isFinal: true });
-  const sorted = merged.sort((a, b) => (a.due || "").localeCompare(b.due || ""));
+  const sorted = merged.sort((a, b) => (b.due || "").localeCompare(a.due || ""));   // 마감이 가장 늦은(최신) 항목이 맨 위
   const nameOf = (id) => members.find((m) => m.id === id)?.name; const colorOf = (id) => members.find((m) => m.id === id)?.color;
   const canAdd = me?.leader;
   return (
@@ -1055,6 +1058,8 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
         </Card>
       )}
       {sorted.length === 0 ? <Empty title="타임테이블이 비어 있습니다" sub={canAdd ? "위에서 항목과 마감을 추가하세요." : "조장이 항목을 추가하면 여기에 표시됩니다."} /> : (
+        <div>
+        <div className="flex items-center gap-1 mb-2" style={{ fontSize: 12, color: C.muted }}><Clock size={12} /> 마감 최신순 · 가장 늦은 마감이 맨 위에 보여요</div>
         <div style={{ position: "relative", paddingLeft: 26 }}>
           <div style={{ position: "absolute", left: 9, top: 6, bottom: 6, width: 2, background: C.line }} />
           {sorted.map((t) => {
@@ -1084,6 +1089,7 @@ function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
               </div>
             );
           })}
+        </div>
         </div>
       )}
     </div>
@@ -1378,11 +1384,123 @@ function RolePicker({ value, onChange }) {
   );
 }
 
+/* ---------- AI 사전 점검 결과 (제출 전 미리보기 · 저장되지 않음) ---------- */
+function PrecheckResult({ r, task, compact }) {
+  const flagged = isFlagged(r.ai), mid = !flagged && r.ai >= AI_LOW;
+  const col = flagged ? C.red : mid ? C.amber : C.green; const soft = flagged ? C.redSoft : mid ? C.amberSoft : C.greenSoft;
+  const fac = Math.round(authFactor(r.ai) * 100);
+  const nowMs = task && task.due ? Date.now() - new Date(task.due).getTime() : 0;
+  const tp = task ? (nowMs <= 0 ? 100 : LATE_TIERS.slice(1, 5).find((x) => nowMs <= x.max).pts) : null;
+  const msg = flagged ? `사용 의심(70% 이상) → 이대로 제출하면 AI 인정도 ${fac}%로 크게 반영되고 교수님 확인 대상으로 표시돼요. 본인 말로 다시 정리한 뒤 한 번 더 점검해 보세요.`
+    : mid ? `일부 사용 가능성(30~69%) → 이대로 제출하면 AI 인정도 ${fac}%로 소폭만 반영돼요. 교수님 확인 대상은 아니에요.`
+    : `사용하지 않았을 가능성 높음(30% 미만) → 이대로 제출하면 감점 없이 AI 인정도 ${fac}%예요.`;
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: soft, border: `1px dashed ${col}` }}>
+      <div className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 800, background: "#fff", color: C.primary }}><Search size={11} /> 사전 점검 결과 · 아직 제출되지 않았고 기록에도 남지 않아요</div>
+      <div className="flex items-baseline gap-2 mt-1.5 flex-wrap"><span style={{ fontSize: compact ? 26 : 32, fontWeight: 800, color: col }}>{r.ai}%</span><span style={{ fontSize: 13, fontWeight: 700, color: col }}>{AI_LABEL(r.ai)}</span><span className="rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, background: "#fff", color: C.muted, whiteSpace: "nowrap" }}>{AI_SRC[r.source]}</span></div>
+      {r.note && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{r.note}</div>}
+      <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{msg}</div>
+      {tp != null && <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>지금 제출한다면 정시 점수 <b>{tp}점</b>{nowMs > 0 ? " (지각)" : " (정시)"} × AI 인정 <b>{fac}%</b> = 이 과업 <b>{Math.round((tp / 100) * (fac / 100) * 100)}점</b> 반영 예상</div>}
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>실제 제출 때 AI 점검을 다시 하며, 결과는 점검 도구에 따라 조금 달라질 수 있어요.</div>
+    </div>
+  );
+}
+
+/* ---------- AI 사전점검 탭: 제출하지 않고 글만 미리 점검 ---------- */
+function PrecheckTab({ tasks, meId, st, setSt, onSubmit }) {
+  const cands = tasks.filter((t) => t.owner === meId && (!t.submittedAt || canEditTask(t)));
+  const task = cands.find((t) => t.id === st.taskId) || null;
+  const run = async () => { if (!st.text.trim() || st.busy) return; setSt((s) => ({ ...s, busy: true })); const r = await detectAI(st.text); setSt((s) => ({ ...s, result: r, busy: false })); };
+  const pick = (id) => { const t = cands.find((x) => x.id === id); setSt((s) => ({ ...s, taskId: id, result: null, text: !s.text.trim() && t && t.text ? t.text : s.text })); };
+  return (
+    <div className="grid gap-3" style={{ maxWidth: 720 }}>
+      <Card>
+        <div className="flex items-center gap-2" style={{ fontWeight: 800 }}><Search size={16} color={C.primary} /> AI 사전 점검</div>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 4, lineHeight: 1.6 }}>제출하기 전에 내 글이 AI 복붙으로 보이는지 <b style={{ color: C.ink }}>미리 확인</b>해 보세요. 여기서 점검한 내용은 제출되지 않고, 점수와 기록에도 남지 않아요. 결과가 걱정되면 본인 말로 고쳐 쓴 뒤 다시 점검해 보세요.</div>
+        <div className="mt-3">
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>어느 과업에 낼 글인가요? (선택 · 고르면 제출 시 예상 점수도 보여줘요)</div>
+          <select value={st.taskId} onChange={(e) => pick(e.target.value)} className="rounded-md px-3 py-2 w-full" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", background: "#fff" }}>
+            <option value="">선택 안 함 (글만 점검)</option>
+            {cands.map((t) => <option key={t.id} value={t.id}>{t.title} · 마감 {fmt(t.due)}{t.submittedAt ? " · 제출함(수정 가능)" : ""}</option>)}
+          </select>
+        </div>
+        <textarea value={st.text} onChange={(e) => setSt((s) => ({ ...s, text: e.target.value, result: null }))} rows={8} placeholder="점검할 글을 붙여넣거나 직접 써 보세요." className="w-full rounded-lg px-3 py-2 mt-3" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} />
+        <div className="flex items-center justify-between mt-1" style={{ fontSize: 12, color: C.muted }}><span>{st.text.trim().length}자</span></div>
+        <div className="flex gap-2 mt-2 flex-wrap">
+          <PrimaryBtn onClick={run} disabled={!st.text.trim() || st.busy}><Search size={15} /> {st.busy ? "점검 중..." : "AI 점검하기 (제출 안 됨)"}</PrimaryBtn>
+          {task && st.result && <GhostBtn onClick={() => onSubmit(task, st.text)}><Send size={15} /> 이 글로 {task.submittedAt ? "수정하기" : "제출하기"}</GhostBtn>}
+        </div>
+      </Card>
+      {st.result && <PrecheckResult r={st.result} task={task} />}
+    </div>
+  );
+}
+
+/* ---------- 내 제출 탭: 내가 낸 자료·제출 시각·점수 반영을 한 곳에서 확인 ---------- */
+function MySubmissions({ tasks, meId, onSubmit, onPrecheck }) {
+  const mine = tasks.filter((t) => t.owner === meId).slice().sort((a, b) => (b.due || "").localeCompare(a.due || ""));
+  const doneN = mine.filter((t) => t.submittedAt).length;
+  const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
+  const [open, setOpen] = useState({});
+  if (mine.length === 0) return <Empty title="내게 배정된 과업이 없어요" sub="팀장이 타임테이블에 과업을 배정하면 여기에 나타나요." />;
+  return (
+    <div className="grid gap-3">
+      <Card>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2" style={{ fontWeight: 800 }}><ClipboardCheck size={16} color={C.primary} /> 내 제출 현황</div>
+          <div style={{ fontSize: 13, color: C.muted }}>제출 완료 <b style={{ color: C.green }}>{doneN}</b> / 전체 {mine.length}건</div>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>제출한 글·첨부 파일, 제출 시각, 점수 반영을 여기서 다시 볼 수 있어요. 마감 전이면 수정도 가능해요.</div>
+      </Card>
+      {mine.map((t) => {
+        const stt = statusOf(t), M = SM[stt]; const tp = timePts(t);
+        const pts = tp == null ? null : Math.round((tp / 100) * authFactor(t.ai) * 100);
+        const sub = !!t.submittedAt; const isOpen = !!open[t.id]; const long = (t.text || "").length > 120;
+        return (
+          <Card key={t.id} style={{ border: `1px solid ${isFlagged(t.ai) ? C.red : C.line}` }}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span style={{ fontWeight: 800, fontSize: 15 }}>{t.title}</span>
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: M.color, background: M.soft }}><M.Icon size={11} /> {M.label}{stt === "late" ? ` · ${fmtLate(lateMs(t))} 지각` : ""}</span>
+              {isFlagged(t.ai) && <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: C.red, background: C.redSoft }}><Sparkles size={11} /> AI 사용 의심</span>}
+              <span className="ml-auto flex items-center gap-1.5">
+                {!sub && ["pending", "missed"].includes(stt) && <button onClick={() => onSubmit(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: C.green }}>제출</button>}
+                {canEditTask(t) && <button onClick={() => onSubmit(t)} className="rounded-md px-2.5 py-1.5" style={{ fontSize: 12, fontWeight: 700, color: C.primary, background: "#EEF2FF", border: "1px solid #D9E1FB" }}>수정</button>}
+                {sub && !canEditTask(t) && <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: C.muted }}><Lock size={11} /> 수정 마감</span>}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>마감 {fmt(t.due)}</div>
+            {sub ? (
+              <div className="rounded-lg px-3 py-2 mt-2" style={{ background: C.greenSoft }}>
+                <div className="flex items-center gap-1.5" style={{ fontSize: 13, fontWeight: 800, color: C.green }}><CheckCircle2 size={14} /> 제출 완료 · {fmt(t.submittedAt)}{t.edits ? <span style={{ fontWeight: 600, color: C.muted }}> · 수정 {t.edits}회</span> : null}</div>
+                <div style={{ fontSize: 12, color: C.ink, marginTop: 4 }}>
+                  AI 점검 <b style={{ color: isFlagged(t.ai) ? C.red : C.ink }}>{t.ai == null ? "—" : `${t.ai}% · ${AI_LABEL(t.ai)}`}</b>
+                  {tp != null && <> · 정시 점수 <b>{tp}점</b> × AI 인정 <b>{Math.round(authFactor(t.ai) * 100)}%</b> = <b>{pts}점</b> 반영</>}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg px-3 py-2 mt-2" style={{ background: "#F4F6FC", fontSize: 13, color: C.muted, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>아직 제출 전이에요.{stt === "missed" ? " 마감이 지났지만 지금도 지연 제출은 할 수 있어요." : ""}<button onClick={onPrecheck} style={{ fontSize: 12, fontWeight: 700, color: C.primary }}>AI 사전 점검 해보기 →</button></div>
+            )}
+            {sub && (t.text || (t.files && t.files.length > 0)) && (
+              <div className="mt-2">
+                {t.text && <div className="rounded-lg px-3 py-2" style={{ background: "#F7F8FC", border: `1px solid ${C.line}`, fontSize: 13, color: C.ink, whiteSpace: "pre-wrap", lineHeight: 1.6, ...(isOpen || !long ? {} : { display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }) }}>{t.text}</div>}
+                <FileChips files={t.files} />
+                {long && <button onClick={() => setOpen((o) => ({ ...o, [t.id]: !isOpen }))} className="mt-1.5" style={{ fontSize: 12, fontWeight: 700, color: C.primary }}>{isOpen ? "접기" : "제출한 내용 전체 보기"}</button>}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------- SUBMIT MODAL ---------- */
-function SubmitModal({ task, onClose, onSubmit }) {
+function SubmitModal({ task, onClose, onSubmit, onViewMine }) {
   const editing = !!task.submittedAt;                               // 이미 제출한 과업을 마감 전에 수정하는 경우
   const [text, setText] = useState(task.text || ""); const [result, setResult] = useState(null); const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState(task.files || []); const [fileErr, setFileErr] = useState(""); const [lockMsg, setLockMsg] = useState("");
+  const [pre, setPre] = useState(null); const [preBusy, setPreBusy] = useState(false);   // 제출 전 미리 점검(저장 안 됨)
+  const runPre = async () => { if (!text.trim() || preBusy || busy) return; setPreBusy(true); const r = await detectAI(text); setPre(r); setPreBusy(false); };
   const doneWord = editing ? "수정 완료!" : "제출 완료!";
   const done = result != null; const len = text.trim().length;
   const MAX_FILES = 5, MAX_MB = 10;
@@ -1414,7 +1532,7 @@ function SubmitModal({ task, onClose, onSubmit }) {
           {!done ? (
             <>
               <div style={{ fontSize: 13, color: C.ink, marginBottom: 6 }}>찾은 자료를 <b>본인 언어로 정리</b>해 붙여넣어 주세요. 제출하면 AI 탐지로 복붙 여부를 점검하고, 점검 결과는 기여도 근거로 기록됩니다.</div>
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder="예) 찾아보니 이 시장은 ~한 구조였고, 내 생각엔 ~ 때문에 우리 제품에 이렇게 적용하면 될 것 같다..." className="w-full rounded-lg px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} />
+              <textarea value={text} onChange={(e) => { setText(e.target.value); setPre(null); }} rows={6} placeholder="예) 찾아보니 이 시장은 ~한 구조였고, 내 생각엔 ~ 때문에 우리 제품에 이렇게 적용하면 될 것 같다..." className="w-full rounded-lg px-3 py-2" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} />
               <div className="flex items-center justify-between mt-1" style={{ fontSize: 12, color: C.muted }}><span>{len}자</span></div>
               <div className="mt-3">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1425,8 +1543,9 @@ function SubmitModal({ task, onClose, onSubmit }) {
                 {fileErr && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{fileErr}</div>}
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>첨부 파일은 참고 자료로만 저장되고, AI 점검은 위에 작성한 글에만 적용됩니다. 제출한 글과 파일은 팀 자료실에 모입니다.</div>
               </div>
+              {pre && <div className="mt-3"><PrecheckResult r={pre} task={task} compact /></div>}
               {lockMsg && <div className="rounded-lg px-3 py-2 mt-3" style={{ fontSize: 12, background: C.redSoft, color: C.red, fontWeight: 600 }}>{lockMsg}</div>}
-              <div className="flex gap-2 mt-3">{!lockMsg && <button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : editing ? "수정 저장하고 다시 검사" : "제출하고 검사"}</button>}<button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
+              <div className="flex gap-2 mt-3">{!lockMsg && <button onClick={go} disabled={!text.trim() || busy} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: text.trim() && !busy ? C.green : "#A9C9B6" }}>{busy ? "AI 탐지 중..." : editing ? "수정 저장하고 다시 검사" : "제출하고 검사"}</button>}{!lockMsg && <button onClick={runPre} disabled={!text.trim() || preBusy || busy} title="제출하지 않고 AI 점검 결과만 미리 확인해요" className="rounded-md px-3 py-2 inline-flex items-center gap-1" style={{ fontSize: 14, fontWeight: 700, color: C.primary, background: "#EEF2FF", border: "1px solid #D9E1FB", opacity: !text.trim() || preBusy || busy ? 0.6 : 1 }}><Search size={14} /> {preBusy ? "점검 중..." : "미리 점검(제출 안 됨)"}</button>}<button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, background: "#fff", border: `1px solid ${C.line}` }}>취소</button></div>
             </>
           ) : (
             <div className="rounded-xl px-4 py-4 text-center" style={{ background: flagged ? C.redSoft : mid ? C.amberSoft : C.greenSoft }}>
@@ -1436,7 +1555,10 @@ function SubmitModal({ task, onClose, onSubmit }) {
               {result.note && <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>{result.note}</div>}
               <div style={{ fontSize: 12, color: C.ink, marginTop: 6 }}>{editing && <b>수정 저장 · </b>}{result.late > 0 ? <>지연 제출 · <b>{fmtLate(result.late)}</b> 지각 → 정시 점수 <b>{result.tier.pts}점</b></> : <>정시 제출 → 정시 점수 <b>100점</b></>}{files.length > 0 && <> · 참고 파일 {files.length}개 첨부</>}</div>
               <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>{flagged ? "사용 의심(70% 이상) → 점수에 크게 반영되고 교수님 확인 대상으로 표시됩니다. 본인 언어로 다시 정리하면 인정도가 올라갑니다." : mid ? "일부 사용 가능성(30~69%) → 점수에 소폭만 반영되며 교수님 확인 대상은 아닙니다. " + doneWord : "사용하지 않았을 가능성 높음(30% 미만) → 감점 없이 본인 정리로 인정됩니다. " + doneWord}</div>
-              <button onClick={onClose} className="rounded-md px-4 py-2 mt-3" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button>
+              <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
+                {onViewMine && <button onClick={onViewMine} className="rounded-md px-4 py-2 inline-flex items-center gap-1" style={{ fontSize: 14, fontWeight: 700, color: C.primary, background: "#fff", border: `1px solid ${C.primary}` }}><ClipboardCheck size={14} /> 내 제출 내용 확인</button>}
+                <button onClick={onClose} className="rounded-md px-4 py-2" style={{ fontSize: 14, fontWeight: 600, color: "#fff", background: C.primary }}>확인</button>
+              </div>
             </div>
           )}
         </div>
