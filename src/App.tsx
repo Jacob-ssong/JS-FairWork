@@ -796,7 +796,6 @@ function CreateProjectWizard({ me, assignments, initialAssignmentId, subjects, p
 function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const [tab, setTab] = useState("chat");
   const [submitFor, setSubmitFor] = useState(null);
-  const [pre, setPre] = useState({ text: "", taskId: "", result: null, busy: false });   // AI 사전점검 탭 상태(탭을 옮겨도 유지)
   const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
   const meId = me?.id;
 
@@ -818,7 +817,7 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const endProject = () => patch((pr) => ({ ...pr, ended: true, chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: "프로젝트가 종료되었습니다. 이제 익명 동료평가를 제출할 수 있어요.", ts: Date.now() }] }));
   const setMemberRole = (id, role) => patch((pr) => ({ ...pr, members: pr.members.map((m) => (m.id === id ? { ...m, role } : m)) }));
 
-  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["mine", "내 제출", ClipboardCheck], ["precheck", "AI 사전점검", Search], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
+  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["mine", "내 제출", ClipboardCheck], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
 
   return (
     <div>
@@ -851,8 +850,7 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
         {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
         {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && (!t.submittedAt || canEditTask(t)) && setSubmitFor(t)} meId={meId} />}
         {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} />}
-        {tab === "mine" && <MySubmissions tasks={p.tasks} meId={meId} onSubmit={(t) => setSubmitFor(t)} onPrecheck={() => setTab("precheck")} />}
-        {tab === "precheck" && <PrecheckTab tasks={p.tasks} meId={meId} st={pre} setSt={setPre} onSubmit={(t, text) => setSubmitFor({ ...t, text })} />}
+        {tab === "mine" && <MySubmissions tasks={p.tasks} meId={meId} onSubmit={(t) => setSubmitFor(t)} />}
         {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} meId={meId} onEdit={(t) => setSubmitFor(t)} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
         {tab === "score" && <ScoreTab members={p.members} tasks={p.tasks} meId={meId} />}
         {tab === "peer" && <PeerTab key={meId} members={p.members} peerEvals={p.peerEvals} meId={meId} ended={!!p.ended} isLeader={!!me?.leader} onEnd={endProject} onSubmit={submitPeer} />}
@@ -1406,38 +1404,8 @@ function PrecheckResult({ r, task, compact }) {
   );
 }
 
-/* ---------- AI 사전점검 탭: 제출하지 않고 글만 미리 점검 ---------- */
-function PrecheckTab({ tasks, meId, st, setSt, onSubmit }) {
-  const cands = tasks.filter((t) => t.owner === meId && (!t.submittedAt || canEditTask(t)));
-  const task = cands.find((t) => t.id === st.taskId) || null;
-  const run = async () => { if (!st.text.trim() || st.busy) return; setSt((s) => ({ ...s, busy: true })); const r = await detectAI(st.text); setSt((s) => ({ ...s, result: r, busy: false })); };
-  const pick = (id) => { const t = cands.find((x) => x.id === id); setSt((s) => ({ ...s, taskId: id, result: null, text: !s.text.trim() && t && t.text ? t.text : s.text })); };
-  return (
-    <div className="grid gap-3" style={{ maxWidth: 720 }}>
-      <Card>
-        <div className="flex items-center gap-2" style={{ fontWeight: 800 }}><Search size={16} color={C.primary} /> AI 사전 점검</div>
-        <div style={{ fontSize: 13, color: C.muted, marginTop: 4, lineHeight: 1.6 }}>제출하기 전에 내 글이 AI 복붙으로 보이는지 <b style={{ color: C.ink }}>미리 확인</b>해 보세요. 여기서 점검한 내용은 제출되지 않고, 점수와 기록에도 남지 않아요. 결과가 걱정되면 본인 말로 고쳐 쓴 뒤 다시 점검해 보세요.</div>
-        <div className="mt-3">
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>어느 과업에 낼 글인가요? (선택 · 고르면 제출 시 예상 점수도 보여줘요)</div>
-          <select value={st.taskId} onChange={(e) => pick(e.target.value)} className="rounded-md px-3 py-2 w-full" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", background: "#fff" }}>
-            <option value="">선택 안 함 (글만 점검)</option>
-            {cands.map((t) => <option key={t.id} value={t.id}>{t.title} · 마감 {fmt(t.due)}{t.submittedAt ? " · 제출함(수정 가능)" : ""}</option>)}
-          </select>
-        </div>
-        <textarea value={st.text} onChange={(e) => setSt((s) => ({ ...s, text: e.target.value, result: null }))} rows={8} placeholder="점검할 글을 붙여넣거나 직접 써 보세요." className="w-full rounded-lg px-3 py-2 mt-3" style={{ fontSize: 14, border: `1px solid ${C.line}`, outline: "none", resize: "vertical" }} />
-        <div className="flex items-center justify-between mt-1" style={{ fontSize: 12, color: C.muted }}><span>{st.text.trim().length}자</span></div>
-        <div className="flex gap-2 mt-2 flex-wrap">
-          <PrimaryBtn onClick={run} disabled={!st.text.trim() || st.busy}><Search size={15} /> {st.busy ? "점검 중..." : "AI 점검하기 (제출 안 됨)"}</PrimaryBtn>
-          {task && st.result && <GhostBtn onClick={() => onSubmit(task, st.text)}><Send size={15} /> 이 글로 {task.submittedAt ? "수정하기" : "제출하기"}</GhostBtn>}
-        </div>
-      </Card>
-      {st.result && <PrecheckResult r={st.result} task={task} />}
-    </div>
-  );
-}
-
 /* ---------- 내 제출 탭: 내가 낸 자료·제출 시각·점수 반영을 한 곳에서 확인 ---------- */
-function MySubmissions({ tasks, meId, onSubmit, onPrecheck }) {
+function MySubmissions({ tasks, meId, onSubmit }) {
   const mine = tasks.filter((t) => t.owner === meId).slice().sort((a, b) => (b.due || "").localeCompare(a.due || ""));
   const doneN = mine.filter((t) => t.submittedAt).length;
   const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
@@ -1478,7 +1446,7 @@ function MySubmissions({ tasks, meId, onSubmit, onPrecheck }) {
                 </div>
               </div>
             ) : (
-              <div className="rounded-lg px-3 py-2 mt-2" style={{ background: "#F4F6FC", fontSize: 13, color: C.muted, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>아직 제출 전이에요.{stt === "missed" ? " 마감이 지났지만 지금도 지연 제출은 할 수 있어요." : ""}<button onClick={onPrecheck} style={{ fontSize: 12, fontWeight: 700, color: C.primary }}>AI 사전 점검 해보기 →</button></div>
+              <div className="rounded-lg px-3 py-2 mt-2" style={{ background: "#F4F6FC", fontSize: 13, color: C.muted, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>아직 제출 전이에요.{stt === "missed" ? " 마감이 지났지만 지금도 지연 제출은 할 수 있어요." : ""}</div>
             )}
             {sub && (t.text || (t.files && t.files.length > 0)) && (
               <div className="mt-2">
