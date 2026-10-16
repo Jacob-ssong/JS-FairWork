@@ -796,6 +796,7 @@ function CreateProjectWizard({ me, assignments, initialAssignmentId, subjects, p
 function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const [tab, setTab] = useState("chat");
   const [submitFor, setSubmitFor] = useState(null);
+  const [tlView, setTlView] = useState("all");   // 타임테이블: 전체 일정 / 내 제출
   const me = p.members.find((m) => m.sid === meSid) || p.members.find((m) => m.leader) || p.members[0];
   const meId = me?.id;
 
@@ -811,13 +812,28 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
   const renameFolder = (id, name) => patch((pr) => ({ ...pr, folders: (pr.folders || []).map((f) => (f.id === id ? { ...f, name } : f)) }));
   const removeFolder = (id) => patch((pr) => ({ ...pr, folders: (pr.folders || []).filter((f) => f.id !== id), tasks: pr.tasks.map((t) => (t.folderId === id ? { ...t, folderId: null } : t)) }));
   const moveTask = (tid, folderId) => patch((pr) => ({ ...pr, tasks: pr.tasks.map((t) => (t.id === tid ? { ...t, folderId: folderId || null } : t)) }));
+  // 개인별 마감 알림을 팀 채팅에 기록: 마감 1일 전부터 '아직 제출 전', 마감이 지나면 '미제출'을 한 번씩 남깁니다.
+  useEffect(() => {
+    const run = () => patch((pr) => {
+      const now = Date.now(); const adds = [];
+      pr.tasks.forEach((t) => {
+        if (t.submittedAt || !t.due) return;
+        const ms = new Date(t.due).getTime() - now; const name = pr.members.find((m) => m.id === t.owner)?.name || "팀원";
+        const has = (k) => pr.chat.some((c) => c.taskId === t.id && c.kind === k) || adds.some((c) => c.taskId === t.id && c.kind === k);
+        if (ms <= 0) { if (!has("overdue")) adds.push({ id: "r" + t.id + "o", sender: "sys", kind: "overdue", taskId: t.id, ts: now, text: `${name}님 · "${t.title}" 마감(${fmt(t.due)})이 지났어요 — 아직 미제출이에요` }); }
+        else if (ms <= 24 * 3600000 && !has("remind")) adds.push({ id: "r" + t.id + "r", sender: "sys", kind: "remind", taskId: t.id, ts: now, text: `${name}님 · "${t.title}" 마감 ${fmt(t.due)} · ${remainText(ms)} — 아직 제출 전이에요` });
+      });
+      return adds.length ? { ...pr, chat: [...pr.chat, ...adds] } : pr;
+    });
+    run(); const id = setInterval(run, 30000); return () => clearInterval(id);
+  }, []);
   const addTask = (title, owner, due) => patch((pr) => ({ ...pr, tasks: [...pr.tasks, { id: "t" + Date.now(), title, owner, due, submittedAt: null, ai: null }], chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: `과업 등록: ${title} · 담당 ${pr.members.find((m) => m.id === owner)?.name} · 마감 ${fmt(due)}`, ts: Date.now() }] }));
   const sendMsg = (text) => patch((pr) => ({ ...pr, chat: [...pr.chat, { id: "c" + Date.now(), sender: meId, text, ts: Date.now() }] }));
   const submitPeer = (from, entries) => patch((pr) => ({ ...pr, peerEvals: [...pr.peerEvals.filter((e) => e.from !== from), ...entries.map((e) => ({ from, ...e }))] }));
   const endProject = () => patch((pr) => ({ ...pr, ended: true, chat: [...pr.chat, { id: "c" + Date.now(), sender: "sys", text: "프로젝트가 종료되었습니다. 이제 익명 동료평가를 제출할 수 있어요.", ts: Date.now() }] }));
   const setMemberRole = (id, role) => patch((pr) => ({ ...pr, members: pr.members.map((m) => (m.id === id ? { ...m, role } : m)) }));
 
-  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["mine", "내 제출", ClipboardCheck], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
+  const TABS = [["chat", "채팅", MessageSquare], ["calendar", "캘린더", CalendarDays], ["timeline", "타임테이블", Clock], ["board", "자료실", FolderOpen], ["score", "기여도 분석", Trophy], ["peer", "동료평가", Star], ["team", "팀 구성", Users]];
 
   return (
     <div>
@@ -847,16 +863,15 @@ function ProjectWorkspace({ p, meSid, onSwitch, patch, onBack }) {
       <ReminderBar tasks={p.tasks} me={me} onSubmit={(t) => setSubmitFor(t)} />
       <div className="flex gap-1 mt-3 overflow-x-auto rounded-2xl p-1.5" style={{ scrollbarWidth: "none", background: "#fff", border: `1px solid ${C.line}`, boxShadow: SH.card }}>{TABS.map(([k, label, Icon]) => <div key={k} className="flex-shrink-0"><Tab active={tab === k} onClick={() => setTab(k)} icon={<Icon size={16} />}>{label}</Tab></div>)}</div>
       <div className="mt-4">
-        {tab === "chat" && <ChatTab members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
+        {tab === "chat" && <ChatTab tasks={p.tasks} members={p.members} chat={p.chat} me={me} finalDue={p.finalDue} sendMsg={sendMsg} addTask={addTask} />}
         {tab === "calendar" && <CalendarTab members={p.members} tasks={p.tasks} finalDue={p.finalDue} addTask={addTask} onPick={(t) => t.owner === meId && (!t.submittedAt || canEditTask(t)) && setSubmitFor(t)} meId={meId} />}
-        {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} />}
-        {tab === "mine" && <MySubmissions tasks={p.tasks} meId={meId} onSubmit={(t) => setSubmitFor(t)} />}
+        {tab === "timeline" && <TimelineTab members={p.members} tasks={p.tasks} me={me} finalDue={p.finalDue} onSubmit={(t) => setSubmitFor(t)} addTask={addTask} view={tlView} setView={setTlView} />}
         {tab === "board" && <BoardTab members={p.members} tasks={p.tasks} folders={p.folders || []} isLeader={!!me?.leader} meId={meId} onEdit={(t) => setSubmitFor(t)} addFolder={addFolder} renameFolder={renameFolder} removeFolder={removeFolder} moveTask={moveTask} />}
         {tab === "score" && <ScoreTab members={p.members} tasks={p.tasks} meId={meId} />}
         {tab === "peer" && <PeerTab key={meId} members={p.members} peerEvals={p.peerEvals} meId={meId} ended={!!p.ended} isLeader={!!me?.leader} onEnd={endProject} onSubmit={submitPeer} />}
         {tab === "team" && <TeamTab members={p.members} tasks={p.tasks} me={me} setRole={setMemberRole} />}
       </div>
-      {submitFor && <SubmitModal task={submitFor} onClose={() => setSubmitFor(null)} onSubmit={submit} onViewMine={() => { setSubmitFor(null); setTab("mine"); }} />}
+      {submitFor && <SubmitModal task={submitFor} onClose={() => setSubmitFor(null)} onSubmit={submit} onViewMine={() => { setSubmitFor(null); setTlView("mine"); setTab("timeline"); }} />}
     </div>
   );
 }
@@ -869,7 +884,7 @@ const QUICK_DUES = [
   { label: "1주 후", days: 7 },
 ];
 
-function ChatTab({ members, chat, me, finalDue, sendMsg, addTask }) {
+function ChatTab({ tasks, members, chat, me, finalDue, sendMsg, addTask }) {
   const [text, setText] = useState(""); const [showTask, setShowTask] = useState(false);
   const [tt, setTt] = useState(""); const [to, setTo] = useState(members[0].id); const [td, setTd] = useState(fromNow(5, 23, 59));
   const ref = useRef(null);
@@ -894,6 +909,13 @@ function ChatTab({ members, chat, me, finalDue, sendMsg, addTask }) {
       </div>
       <div ref={ref} className="px-4 py-4 flex flex-col gap-3" style={{ height: "clamp(260px, 48vh, 380px)", overflowY: "auto", background: "#F7F8FB" }}>
         {chat.map((c) => {
+          if (c.sender === "sys" && c.taskId) {
+            const t = tasks.find((x) => x.id === c.taskId); const done = !!t?.submittedAt; const owner = nameOf(t?.owner) || "팀원";
+            const late = done && statusOf(t) === "late"; const od = c.kind === "overdue";
+            const col = done ? C.green : od ? C.red : "#9A5D00"; const bg = done ? C.greenSoft : od ? C.redSoft : C.amberSoft;
+            const Ic = done ? CheckCircle2 : od ? AlertTriangle : BellRing;
+            return <div key={c.id} className="self-center rounded-xl px-3 py-1.5 inline-flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 700, color: col, background: bg, maxWidth: "92%", textAlign: "left" }}><Ic size={13} style={{ flexShrink: 0 }} /> <span>{done ? `${owner}님이 "${t.title}" 제출 완료 · ${fmt(t.submittedAt)}${late ? " (지각)" : ""}` : c.text}</span><span style={{ fontWeight: 500, opacity: 0.7, whiteSpace: "nowrap" }}>{hhmm(c.ts)}</span></div>;
+          }
           if (c.sender === "sys") return <div key={c.id} className="self-center rounded-full px-3 py-1.5 inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "#EAEEFE" }}><ClipboardCheck size={13} /> {c.text}</div>;
           const mine = c.sender === me?.id;
           return (
@@ -1036,15 +1058,23 @@ function CalendarTab({ members, tasks, finalDue, addTask, onPick, meId }) {
 }
 
 /* ---------- TIMELINE ---------- */
-function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask }) {
+function TimelineTab({ members, tasks, me, finalDue, onSubmit, addTask, view, setView }) {
   const [, tick] = useState(0); useEffect(() => { const id = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(id); }, []);
   const [title, setTitle] = useState(""); const [owner, setOwner] = useState(me?.id); const [due, setDue] = useState(fromNow(7, 23, 59));
   const merged = [...tasks]; if (finalDue) merged.push({ id: "__final", title: "프로젝트 최종 마감", due: finalDue, isFinal: true });
   const sorted = merged.sort((a, b) => (b.due || "").localeCompare(a.due || ""));   // 마감이 가장 늦은(최신) 항목이 맨 위
   const nameOf = (id) => members.find((m) => m.id === id)?.name; const colorOf = (id) => members.find((m) => m.id === id)?.color;
   const canAdd = me?.leader;
+  const myAll = tasks.filter((t) => t.owner === me?.id); const myDone = myAll.filter((t) => t.submittedAt).length;
+  const toggle = (
+    <div className="inline-flex items-center gap-1 rounded-xl p-1 mb-3" style={{ background: "#fff", border: `1px solid ${C.line}` }}>
+      {[["all", "전체 일정", Clock], ["mine", `내 제출 ${myDone}/${myAll.length}`, ClipboardCheck]].map(([k, label, Icon]) => <button key={k} onClick={() => setView(k)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5" style={{ fontSize: 13, fontWeight: 700, color: view === k ? "#fff" : C.muted, background: view === k ? C.primary : "transparent" }}><Icon size={13} /> {label}</button>)}
+    </div>
+  );
+  if (view === "mine") return <div>{toggle}<MySubmissions tasks={tasks} meId={me?.id} onSubmit={onSubmit} /></div>;
   return (
     <div>
+      {toggle}
       {canAdd && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-end gap-2">
@@ -1601,6 +1631,7 @@ function FileChips({ files }) {
 const LEAD_OPTS = [[72, "3일 전부터"], [48, "2일 전부터"], [24, "1일 전부터 (기본)"], [12, "12시간 전부터"], [6, "6시간 전부터"], [3, "3시간 전부터"]];
 const remainText = (ms) => {
   if (ms <= 0) return "마감 지남";
+  if (ms < 60000) return "1분 미만 남음";
   const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mi = m % 60;
   return d > 0 ? `${d}일 ${h}시간 남음` : h > 0 ? `${h}시간 ${mi}분 남음` : `${mi}분 남음`;
 };
